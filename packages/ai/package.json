@@ -1,0 +1,12 @@
+{
+  "name": "@system-one/ai",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./generate": "./src/generate.ts"
+  },
+  "dependencies": {
+    "ai": "^7.0.142"
+  }
+}

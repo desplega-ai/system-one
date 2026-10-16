@@ -1,0 +1,14 @@
+{
+  "name": "@system-one/arcade",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@system-one/ai": "workspace:*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
+  }
+}

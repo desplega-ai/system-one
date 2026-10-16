@@ -1,0 +1,13 @@
+# Keys must never reach the image.
+.env
+.env.*
+data/
+node_modules/
+**/node_modules/
+.git/
+.wrangler/
+docs/
+packages/*/test/
+packages/*/scripts/
+*.log
+.DS_Store

@@ -1,0 +1,19 @@
+{
+  "name": "system-one",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "smoke": "bun packages/ai/scripts/smoke.ts",
+    "dev": "bun --hot packages/arcade/src/server/index.ts",
+    "start": "NODE_ENV=production bun packages/arcade/src/server/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}
