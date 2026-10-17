@@ -10,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/web/components/ui/alert";
 import { budgetSpent } from "../lib/api.ts";
 import { refreshBudget, useBudget } from "../lib/budget.ts";
 import { StageContext } from "../lib/stage.ts";
-import { makerOf } from "../ui/brands.ts";
+import { hostByName, makerOf } from "../ui/brands.ts";
 import { Hud, type RunStats } from "../ui/Hud.tsx";
 import { splitLabel } from "../ui/ModelName.tsx";
 import { Tip } from "../ui/Tip.tsx";
@@ -196,15 +196,17 @@ function PlayerBar({
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex shrink-0 -space-x-2">
             {players.map((p, i) => {
-              const maker = makerOf(splitLabel(p.label).name);
+              // Like the arena's dots: the host's logo, so the same model on two hosts looks different.
+              const { name, provider } = splitLabel(p.label);
+              const brand = (provider && hostByName(provider)) || makerOf(name);
               return (
                 <span
                   key={`${p.label}-${i}`}
                   className="flex size-8 items-center justify-center rounded-full bg-[#101216]"
                   style={{ boxShadow: `0 0 0 2px ${p.color}, 0 0 10px ${p.color}66` }}
-                  title={splitLabel(p.label).name}
+                  title={p.label}
                 >
-                  {maker ? <img src={maker.logo} alt="" className="size-4" /> : <span className="size-2.5 rounded-full" style={{ background: p.color }} />}
+                  {brand ? <img src={brand.logo} alt="" className="size-4" /> : <span className="size-2.5 rounded-full" style={{ background: p.color }} />}
                 </span>
               );
             })}

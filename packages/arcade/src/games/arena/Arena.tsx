@@ -11,7 +11,7 @@ import { refreshBudget } from "../../web/lib/budget.ts";
 import { useSquareSide } from "../../web/lib/hooks.ts";
 import { Board } from "../../web/ui/Board.tsx";
 import { FullscreenButton } from "../../web/ui/FullscreenButton.tsx";
-import { logoImage, makerOf } from "../../web/ui/brands.ts";
+import { hostByKey, logoImage, makerOf } from "../../web/ui/brands.ts";
 import { agentColors } from "../../web/ui/colors.ts";
 import { addCall, emptyStats, type RunStats, usd } from "../../web/ui/Hud.tsx";
 import { ModelName, splitLabel } from "../../web/ui/ModelName.tsx";
@@ -99,10 +99,12 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
   const logos = useRef<Record<string, HTMLImageElement | undefined>>({});
   const onRing = match?.agents ?? previewMatch()?.agents ?? [];
   labels.current = Object.fromEntries(onRing.map((a) => [a.id, splitLabel(label(a.model)).name]));
+  // The dot shows where the model runs (the host), and the label under it names the model. So three Jevs on
+  // three hosts look different. The registry key starts with the host: "openrouter:jev-latest".
   logos.current = Object.fromEntries(
     onRing.map((a) => {
-      const maker = makerOf(splitLabel(label(a.model)).name);
-      return [a.id, maker && logoImage(maker.logo)];
+      const brand = hostByKey(a.model.split(":")[0]!) ?? makerOf(splitLabel(label(a.model)).name);
+      return [a.id, brand && logoImage(brand.logo)];
     }),
   );
   const view = useRef<{ field: Field; state: unknown } | null>(null);
