@@ -234,6 +234,57 @@ test("/api/stats sums the call log, keeps visitor data out, and checks the range
   expect((await get("/api/stats", "?range=1y")).status).toBe(400);
 });
 
+describe("/api/live", () => {
+  /** Reads server-sent events from a stream, skipping comment lines. */
+  function events(res: Response) {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    return async () => {
+      for (;;) {
+        const end = buffer.indexOf("\n\n");
+        if (end >= 0) {
+          const chunk = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (chunk.startsWith("data: ")) return JSON.parse(chunk.slice(6));
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) throw new Error("stream closed");
+        buffer += decoder.decode(value);
+      }
+    };
+  }
+  const open = (api: ReturnType<typeof setup>["api"], signal: AbortSignal, ip = "1.2.3.4") =>
+    (api["/api/live"] as { GET: (req: Request) => Response }).GET(new Request("http://x/api/live", { signal, headers: { "fly-client-ip": ip } }));
+
+  test("sends the newest calls, then each new call, without visitor data", async () => {
+    const { api, post, runId } = setup();
+    await post("/api/decide", { runId, model: "fake:ok", call });
+    const abort = new AbortController();
+    const res = open(api, abort.signal);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    const next = events(res);
+    const first = await next();
+    expect(first).toMatchObject({ backlog: true, calls: [{ model: "fake:ok", game: "other", kind: "decide", error: null }], today: { calls: 1 }, viewers: 1 });
+    expect(JSON.stringify(first)).not.toMatch(/visitor|ip_hash|ipHash|input|output/);
+
+    await post("/api/decide", { runId, model: "fake:down", call });
+    const second = await next();
+    expect(second).toMatchObject({ backlog: false, calls: [{ model: "fake:down", error: "http" }], today: { calls: 2 } });
+    abort.abort();
+  });
+
+  test("caps the open pages per IP", async () => {
+    const { api } = setup();
+    const abort = new AbortController();
+    const statuses = Array.from({ length: 5 }, () => open(api, abort.signal).status);
+    expect(statuses).toEqual([200, 200, 200, 200, 503]);
+    expect(open(api, abort.signal, "5.6.7.8").status).toBe(200);
+    abort.abort();
+  });
+});
+
 test("/api/budget shows the caps and today's spend", async () => {
   const { get } = setup();
   expect(await (await get("/api/budget")).json()).toEqual({ dailyUsd: 1, providers: {}, spent: { total: 0, byProvider: {} } });

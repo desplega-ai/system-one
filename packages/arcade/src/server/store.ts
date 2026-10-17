@@ -27,6 +27,18 @@ export type Score = { model: string; metric: string; value: number };
 export type RankingRow = { model: string; metric: string; rows: number; mean: number; sum: number };
 export type Spend = { total: number; byProvider: Record<string, number> };
 
+/** One call as the live feed shows it: no visitor, no IP hash, no input or output. */
+export type RecentCall = {
+  at: string;
+  game: string;
+  model: string;
+  provider: string;
+  kind: CallKind;
+  latencyMs: number;
+  usd: number | null;
+  error: string | null;
+};
+
 export const statsRanges = ["today", "7d", "30d"] as const;
 export type StatsRange = (typeof statsRanges)[number];
 /** Call counts, spend, tokens and latency. "aborted" calls were stopped by the page (a newer turn replaced
@@ -112,7 +124,7 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   db.run("CREATE INDEX IF NOT EXISTS calls_ip_hash ON calls(ip_hash, started_at)");
 
   const insertRun = db.query("INSERT INTO runs (id, game, created_at, config, visitor) VALUES ($id, $game, $createdAt, $config, $visitor)");
-  const selectRun = db.query<{ id: string; visitor: string | null }, { id: string }>("SELECT id, visitor FROM runs WHERE id = $id");
+  const selectRun = db.query<{ id: string; game: string; visitor: string | null }, { id: string }>("SELECT id, game, visitor FROM runs WHERE id = $id");
   const selectScored = db.query<{ n: number }, { runId: string }>("SELECT COUNT(*) AS n FROM scores WHERE run_id = $runId");
   const selectPlayed = db.query<{ model: string }, { runId: string }>("SELECT DISTINCT model FROM calls WHERE run_id = $runId");
   const insertCall = db.query(`INSERT INTO calls
@@ -126,6 +138,12 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   );
   const today = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const insertScore = db.query("INSERT INTO scores (run_id, model, metric, value) VALUES ($runId, $model, $metric, $value)");
+  const selectToday = db.query<{ calls: number; usd: number }, { since: string }>(
+    "SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since",
+  );
+  const selectRecent = db.query<RecentCall, { limit: number }>(`SELECT c.started_at AS at, r.game AS game, c.model AS model, c.provider AS provider,
+      c.kind AS kind, c.latency_ms AS latencyMs, c.cost_usd AS usd, c.error_code AS error
+    FROM calls c JOIN runs r ON r.id = c.run_id ORDER BY c.started_at DESC LIMIT $limit`);
   const selectSpend = db.query<{ provider: string; usd: number }, { since: string }>(
     "SELECT provider, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since GROUP BY provider",
   );
@@ -139,6 +157,11 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
 
     hasRun(id: string): boolean {
       return selectRun.get({ id }) !== null;
+    },
+
+    /** The game the run belongs to, for example "plane-realtime". */
+    runGame(id: string): string | null {
+      return selectRun.get({ id })?.game ?? null;
     },
 
     /** The visitor that created the run, or null for runs made without one. */
@@ -189,6 +212,16 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
       db.transaction(() => {
         for (const s of scores) insertScore.run({ runId, ...s });
       })();
+    },
+
+    /** The calls and their cost since 00:00 UTC today. */
+    todayTotals(now = new Date()): { calls: number; usd: number } {
+      return selectToday.get({ since: today(now) }) ?? { calls: 0, usd: 0 };
+    },
+
+    /** The newest calls, oldest first, with the game of their run. For the live feed. */
+    recentCalls(limit: number): RecentCall[] {
+      return selectRecent.all({ limit }).reverse();
     },
 
     /** Spend since 00:00 UTC today. */

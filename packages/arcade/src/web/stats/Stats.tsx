@@ -1,4 +1,5 @@
-// The Stats page: the server's call log, summed for today or the last 7 or 30 days. It polls every 30 s.
+// The Stats page: a live feed of the calls, and the server's call log summed for today (polled every 5 s)
+// or the last 7 or 30 days (every 30 s).
 import { cn } from "cn";
 import { ArrowDown, ArrowUp, ChartColumn, Coins, Gamepad2, Hash, type LucideIcon, Timer, TriangleAlert, Users, Zap } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -12,35 +13,16 @@ import { refreshBudget, useBudget } from "../lib/budget.ts";
 import { hostByKey } from "../ui/brands.ts";
 import { ModelName } from "../ui/ModelName.tsx";
 import { onChip } from "../ui/RankingFilters.tsx";
+import { compact, count, gameLabel, money, ms, percent } from "./format.ts";
+import { LivePanel } from "./Live.tsx";
 
-const REFRESH_MS = 30_000;
+/** How often each range polls. The server caches today for 4 s and the longer ranges for 15 s. */
+const REFRESH_MS: Record<StatsRange, number> = { today: 5_000, "7d": 30_000, "30d": 30_000 };
 const ranges: { value: StatsRange; label: string; days: number }[] = [
   { value: "today", label: "Today", days: 1 },
   { value: "7d", label: "7 days", days: 7 },
   { value: "30d", label: "30 days", days: 30 },
 ];
-
-const counter = new Intl.NumberFormat("en");
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const count = (n: number) => counter.format(n);
-/** Small amounts keep more digits: "$1.24", "$0.029", "$0.0035", "<$0.0001". */
-const money = (n: number) =>
-  n === 0 || Number.isInteger(n) ? `$${n}` : n >= 1 ? `$${n.toFixed(2)}` : n >= 0.01 ? `$${n.toFixed(3)}` : n >= 0.0001 ? `$${n.toFixed(4)}` : "<$0.0001";
-const ms = (n: number | null) => (n === null ? "none" : n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`);
-/** "24%", "2.9%", "<0.1%". */
-function percent(part: number, whole: number): string {
-  const value = whole === 0 ? 0 : (part / whole) * 100;
-  if (value > 0 && value < 0.1) return "<0.1%";
-  return `${value.toFixed(value < 10 ? 1 : 0)}%`;
-}
-
-/** "arena-realtime" becomes "Arena, ring" and "real-time". */
-const gameNames: Record<string, string> = { arena: "Arena, ring", plane: "Arena, plane", attention: "Attention", setup: "Setup in words", voice: "Voice", other: "Other" };
-const variantNames: Record<string, string> = { lockstep: "lockstep", realtime: "real-time", live: "webcam", still: "pictures", free: "free talk" };
-function gameLabel(game: string): { name: string; variant: string } {
-  const [head = game, ...rest] = game.split("-");
-  return { name: gameNames[head] ?? head, variant: rest.map((part) => variantNames[part] ?? part).join(" ") };
-}
 
 const errorNotes: Record<string, string> = {
   aborted: "Stopped by the page, for example when a newer turn replaced the call. Not a failure.",
@@ -77,7 +59,7 @@ export function Stats({ arg }: { arg?: string }) {
       refreshBudget();
     };
     load();
-    const id = setInterval(() => document.hidden || load(), REFRESH_MS);
+    const id = setInterval(() => document.hidden || load(), REFRESH_MS[range.value]);
     return () => {
       live = false;
       clearInterval(id);
@@ -89,17 +71,20 @@ export function Stats({ arg }: { arg?: string }) {
 
   return (
     <div className="space-y-5 py-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <ChartColumn className="size-5 text-muted-foreground" /> Stats
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">Every model call the arcade made, from the server's log. Days start at 00:00 UTC.</p>
-        </div>
+      <header>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+          <ChartColumn className="size-5 text-muted-foreground" /> Stats
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">Every model call the arcade makes, from the server's log. Days start at 00:00 UTC.</p>
+      </header>
+
+      <LivePanel label={label} />
+
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
+        <h2 className="text-lg font-semibold tracking-tight">Summary</h2>
         <div className="flex flex-wrap items-center gap-3">
           {updated && (
-            <span className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-              <span className="size-1.5 animate-pulse rounded-full bg-live" />
+            <span className="font-mono text-xs text-muted-foreground">
               updated {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
@@ -119,7 +104,7 @@ export function Stats({ arg }: { arg?: string }) {
             ))}
           </ToggleGroup>
         </div>
-      </header>
+      </div>
 
       {error && (
         <Alert variant="destructive">

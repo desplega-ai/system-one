@@ -14,7 +14,8 @@ import { cheapModels, gatewayCostUsd, generateText, transcribe } from "@system-o
 import type { BunRequest } from "bun";
 import { type Budget, overBudget, overShare } from "./budget.ts";
 import type { ModelEntry } from "./models.ts";
-import { redact, type Score, type Stats, type StatsRange, type Store, fingerprint, statsRanges } from "./store.ts";
+import { createLive } from "./live.ts";
+import { type CallRecord, redact, type Score, type Stats, type StatsRange, type Store, fingerprint, statsRanges } from "./store.ts";
 
 export type Transcription = { text: string; language: string | undefined; durationInSeconds: number | undefined; usage: Usage };
 export type Transcriber = (clip: AudioPart, signal: AbortSignal) => Promise<Transcription>;
@@ -86,9 +87,11 @@ const idPattern = /^[a-z0-9-]{1,40}$/;
 const MAX_OPEN_CALLS = { visitor: 8, ip: 16 };
 /** New runs per IP and window, so nobody can fill the database with empty runs. */
 const MAX_RUNS = { count: 60, windowMs: 10 * 60_000 };
-const STATS_CACHE_MS = 15_000;
-/** Run names come from the browser, so the public Stats page names only the site's games and sums the rest as "other". */
+/** Today's stats change fast and the Stats page polls them every 5 s. Longer ranges change slowly. */
+const STATS_CACHE_MS: Record<StatsRange, number> = { today: 4_000, "7d": 15_000, "30d": 15_000 };
 const listedGame = /^(arena|plane)-(lockstep|realtime)$|^attention-(live|still)$|^setup-(arena|attention)$|^voice-(free|missions)$/;
+/** Run names come from the browser, so the public Stats page and the live feed name only the site's games. */
+const shownGame = (game: string) => (listedGame.test(game) ? game : "other");
 const metricPattern = /^[a-z0-9_]{1,40}$/;
 
 export function createApi({ store, models, budget, transcriber = gatewayTranscriber, generator = gatewayGenerator }: Deps) {
@@ -108,17 +111,35 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
   const statsCache = new Map<StatsRange, { at: number; stats: Stats }>();
   const statsFor = (range: StatsRange): Stats => {
     const hit = statsCache.get(range);
-    if (hit && Date.now() - hit.at < STATS_CACHE_MS) return hit.stats;
+    if (hit && Date.now() - hit.at < STATS_CACHE_MS[range]) return hit.stats;
     const raw = store.stats(range);
     const games = new Map<string, Stats["games"][number]>();
     for (const row of raw.games) {
-      const game = listedGame.test(row.game) ? row.game : "other";
+      const game = shownGame(row.game);
       const sum = games.get(game) ?? { game, runs: 0, calls: 0, usd: 0 };
       games.set(game, { game, runs: sum.runs + row.runs, calls: sum.calls + row.calls, usd: sum.usd + row.usd });
     }
     const stats = { ...raw, games: [...games.values()].sort((a, b) => b.calls - a.calls) };
     statsCache.set(range, { at: Date.now(), stats });
     return stats;
+  };
+  const live = createLive({
+    today: () => store.todayTotals(),
+    recent: () => store.recentCalls(20).map((call) => ({ ...call, game: shownGame(call.game) })),
+  });
+  /** Stores a call and sends it to the live feed. */
+  const recordCall = (call: CallRecord) => {
+    store.recordCall(call);
+    live.push({
+      at: call.startedAt.toISOString(),
+      game: shownGame(store.runGame(call.runId) ?? "other"),
+      model: call.model,
+      provider: call.provider,
+      kind: call.kind,
+      latencyMs: Math.round(call.latencyMs),
+      usd: call.usage?.costUsd ?? null,
+      error: call.errorCode ?? null,
+    });
   };
   const open = new Map<string, number>();
   /** Takes a slot for one model call, or throws 429. Returns the function that frees it. */
@@ -211,10 +232,10 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         try {
           const result = await entry.model.decide({ ...call, signal: req.signal });
           const latencyMs = Math.round(performance.now() - t0);
-          store.recordCall({ ...record, latencyMs, usage: result.usage, output: result.answers });
+          recordCall({ ...record, latencyMs, usage: result.usage, output: result.answers });
           return { answers: result.answers, usage: result.usage, latencyMs, model: result.model };
         } catch (error) {
-          store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: usageOf(error), output: null, errorCode: errorCodeOf(error) });
+          recordCall({ ...record, latencyMs: performance.now() - t0, usage: usageOf(error), output: null, errorCode: errorCodeOf(error) });
           throw error;
         } finally {
           free();
@@ -237,10 +258,10 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         try {
           const result = await transcriber(clip, req.signal);
           const latencyMs = Math.round(performance.now() - t0);
-          store.recordCall({ ...record, latencyMs, usage: result.usage, output: { text: result.text, language: result.language } });
+          recordCall({ ...record, latencyMs, usage: result.usage, output: { text: result.text, language: result.language } });
           return { ...result, latencyMs };
         } catch (error) {
-          store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
+          recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
           throw new HttpError(502, "transcription_failed", error instanceof Error ? error.message : String(error));
         } finally {
           free();
@@ -265,10 +286,10 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         try {
           const result = await generator({ system, prompt }, req.signal);
           const latencyMs = Math.round(performance.now() - t0);
-          store.recordCall({ ...record, latencyMs, usage: result.usage, output: { text: result.text } });
+          recordCall({ ...record, latencyMs, usage: result.usage, output: { text: result.text } });
           return { ...result, latencyMs };
         } catch (error) {
-          store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
+          recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
           throw new HttpError(502, "generation_failed", error instanceof Error ? error.message : String(error));
         } finally {
           free();
@@ -300,6 +321,11 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         spent: store.spendToday(),
         ...(budget.visitorUsd !== undefined ? { you: { spent: store.shareToday(who).visitor, cap: budget.visitorUsd } } : {}),
       })),
+    },
+
+    "/api/live": {
+      // Server-sent events: the newest calls first, then each new call within a second.
+      GET: (req: Request) => live.open(whoOf(req).ipHash, req.signal),
     },
 
     "/api/stats": {

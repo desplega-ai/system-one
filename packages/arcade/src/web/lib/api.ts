@@ -38,6 +38,19 @@ export type Stats = {
   games: { game: string; runs: number; calls: number; usd: number }[];
   errors: { code: string; calls: number }[];
 };
+/** One call in the live feed. `usd` is null when the provider reported no cost. */
+export type LiveCall = {
+  at: string;
+  game: string;
+  model: string;
+  provider: string;
+  kind: "decide" | "transcribe" | "generate";
+  latencyMs: number;
+  usd: number | null;
+  error: string | null;
+};
+/** One server-sent event from /api/live. The first one (`backlog`) holds the newest calls from before. */
+export type LiveEvent = { backlog: boolean; calls: LiveCall[]; today: { calls: number; usd: number }; viewers: number };
 export type BudgetInfo = {
   dailyUsd?: number;
   providers: Record<string, number>;
