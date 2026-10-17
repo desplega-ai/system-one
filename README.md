@@ -113,7 +113,7 @@ The database has 3 tables: `runs`, `calls` (every decide, transcribe and generat
 
 Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429 (`budget_exceeded`), and the game pauses.
 
-A public site also caps each visitor: `"visitorUsd":0.05` per visitor cookie (`s1v`, made on the first API call) and `"ipUsd":0.15` per IP address, so clearing the cookie does not reset the share. Over a share, a call fails with 429 `share_exceeded`, and the page says to come back tomorrow. The database keeps a salted hash of the IP (`SYSTEM_ONE_SALT`), not the address. A run takes scores once, and only from the visitor that created it.
+A public site also caps each visitor: `"visitorUsd":0.1` per visitor cookie (`s1v`, made on the first API call) and `"ipUsd":0.3` per IP address, so clearing the cookie does not reset the share. Over a share, a call fails with 429 `share_exceeded`, and the page says to come back tomorrow. The database keeps a salted hash of the IP (`SYSTEM_ONE_SALT`), not the address. A run takes scores once, and only from the visitor that created it.
 
 Arena: 2 to 6 models on a field. Each turn every model answers `move`, `target` and `fire`. Two fields:
 

@@ -8,6 +8,9 @@ import { Logo } from "./Logo.tsx";
 export type NavLink = { path: string; title: string; icon: ComponentType<{ className?: string }> };
 
 const dollars = (n: number) => (n > 0 && n < 0.01 ? "<$0.01" : `$${n.toFixed(2)}`);
+// Measured costs: a 30 s webcam session with 3 models, and one arena match with 4.
+const webcamUsd = 0.02;
+const matchUsd = 0.004;
 
 export function TopBar({ links, active }: { links: NavLink[]; active?: string }) {
   const budget = useBudget();
@@ -61,9 +64,21 @@ function BudgetPill({ budget }: { budget: BudgetInfo }) {
         </div>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        {budget.you
-          ? `Model calls cost money, so each visitor gets $${budget.you.cap} a day. It is enough for a few webcam sessions or about ten matches.`
-          : "What the model calls cost today. The server refuses calls above the daily cap."}
+        {budget.you ? (
+          <>
+            <p>
+              Model calls cost money, so each visitor gets {dollars(budget.you.cap)} a day. That is about {Math.floor(budget.you.cap / webcamUsd)} webcam
+              sessions with 3 models, or {Math.floor(budget.you.cap / matchUsd)} matches.
+            </p>
+            {budget.dailyUsd !== undefined && (
+              <p className="mt-1 opacity-70">
+                The whole arcade today: {dollars(budget.spent.total)} of {dollars(budget.dailyUsd)}.
+              </p>
+            )}
+          </>
+        ) : (
+          "What the model calls cost today. The server refuses calls above the daily cap."
+        )}
       </TooltipContent>
     </Tooltip>
   );
