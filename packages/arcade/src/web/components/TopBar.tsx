@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/tooltip";
 import type { BudgetInfo } from "../lib/api.ts";
 import { useBudget } from "../lib/budget.ts";
+import { FlipText } from "../ui/FlipText.tsx";
 import { GitHubMark, repoUrl } from "./GitHub.tsx";
 import { Logo } from "./Logo.tsx";
 
@@ -39,13 +40,20 @@ export function TopBar({ links, active }: { links: NavLink[]; active?: string })
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <a href="#/live" className={linkClass(active === "live")} aria-label="Live">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-live opacity-60" />
+              <span className="relative inline-flex size-2 rounded-full bg-live" />
+            </span>
+            <span className="hidden sm:inline">Live</span>
+          </a>
           <a href="#/stats" className={linkClass(active === "stats")} aria-label="Stats">
             <ChartColumn className="size-4" />
             <span className="hidden sm:inline">Stats</span>
           </a>
           <Tooltip>
             <TooltipTrigger asChild>
-              <a href={repoUrl} target="_blank" rel="noreferrer" className={cn(linkClass(false), "px-2 sm:px-2")} aria-label="Source on GitHub">
+              <a href={repoUrl} target="_blank" rel="noreferrer" className={cn(linkClass(false), "hidden px-2 sm:inline-flex sm:px-2")} aria-label="Source on GitHub">
                 <GitHubMark className="size-4" />
               </a>
             </TooltipTrigger>
@@ -58,7 +66,8 @@ export function TopBar({ links, active }: { links: NavLink[]; active?: string })
   );
 }
 
-/** Two gauges in one pill: this visitor's share and the whole arcade's day. A private server has only the day. */
+/** Two gauges in one pill: this visitor's share and the whole arcade's day. A private server has only the day.
+ * The spend has 4 decimals, and its changed digits flip in as the budget refreshes (every 5 s). */
 function BudgetMeter({ budget }: { budget: BudgetInfo }) {
   const site = budget.dailyUsd !== undefined ? { spent: budget.spent.total, cap: budget.dailyUsd } : undefined;
   const you = budget.you;
@@ -116,9 +125,10 @@ function Gauge({ label, spent, cap, className }: { label: string; spent: number;
         )}
       </svg>
       <span className="caps hidden text-[10px] text-muted-foreground lg:inline">{label}</span>
-      <span>
-        <span className={tone}>{dollars(spent)}</span>
-        <span className="text-muted-foreground"> / {dollars(cap)}</span>
+      <span className="flex items-baseline">
+        <FlipText text={`$${spent.toFixed(4)}`} className={tone} />
+        {/* Phones show the ring and the spend only. */}
+        <span className="hidden whitespace-pre text-muted-foreground sm:inline"> / {dollars(cap)}</span>
       </span>
     </span>
   );

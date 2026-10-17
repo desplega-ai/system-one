@@ -39,6 +39,9 @@ export type RecentCall = {
   error: string | null;
 };
 
+/** The parameters of a stats query: a start, and a visitor for "show mine". */
+type Scope = { since: string; visitor?: string };
+
 export const statsRanges = ["today", "7d", "30d"] as const;
 export type StatsRange = (typeof statsRanges)[number];
 /** Call counts, spend, tokens and latency. "aborted" calls were stopped by the page (a newer turn replaced
@@ -141,9 +144,17 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   const selectToday = db.query<{ calls: number; usd: number }, { since: string }>(
     "SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since",
   );
-  const selectRecent = db.query<RecentCall, { limit: number }>(`SELECT c.started_at AS at, r.game AS game, c.model AS model, c.provider AS provider,
-      c.kind AS kind, c.latency_ms AS latencyMs, c.cost_usd AS usd, c.error_code AS error
-    FROM calls c JOIN runs r ON r.id = c.run_id ORDER BY c.started_at DESC LIMIT $limit`);
+  const selectTodayOf = db.query<{ calls: number; usd: number }, { since: string; visitor: string }>(
+    "SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE visitor = $visitor AND started_at >= $since",
+  );
+  const recentColumns = `c.started_at AS at, r.game AS game, c.model AS model, c.provider AS provider,
+    c.kind AS kind, c.latency_ms AS latencyMs, c.cost_usd AS usd, c.error_code AS error`;
+  const selectRecent = db.query<RecentCall, { limit: number }>(
+    `SELECT ${recentColumns} FROM calls c JOIN runs r ON r.id = c.run_id ORDER BY c.started_at DESC LIMIT $limit`,
+  );
+  const selectRecentOf = db.query<RecentCall, { limit: number; visitor: string }>(
+    `SELECT ${recentColumns} FROM calls c JOIN runs r ON r.id = c.run_id WHERE c.visitor = $visitor ORDER BY c.started_at DESC LIMIT $limit`,
+  );
   const selectSpend = db.query<{ provider: string; usd: number }, { since: string }>(
     "SELECT provider, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since GROUP BY provider",
   );
@@ -214,14 +225,15 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
       })();
     },
 
-    /** The calls and their cost since 00:00 UTC today. */
-    todayTotals(now = new Date()): { calls: number; usd: number } {
-      return selectToday.get({ since: today(now) }) ?? { calls: 0, usd: 0 };
+    /** The calls and their cost since 00:00 UTC today, of everyone or of one visitor. */
+    todayTotals(now = new Date(), visitor?: string): { calls: number; usd: number } {
+      const since = today(now);
+      return (visitor ? selectTodayOf.get({ since, visitor }) : selectToday.get({ since })) ?? { calls: 0, usd: 0 };
     },
 
-    /** The newest calls, oldest first, with the game of their run. For the live feed. */
-    recentCalls(limit: number): RecentCall[] {
-      return selectRecent.all({ limit }).reverse();
+    /** The newest calls, oldest first, with the game of their run, of everyone or of one visitor. For the live feed. */
+    recentCalls(limit: number, visitor?: string): RecentCall[] {
+      return (visitor ? selectRecentOf.all({ limit, visitor }) : selectRecent.all({ limit })).reverse();
     },
 
     /** Spend since 00:00 UTC today. */
@@ -256,11 +268,14 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
     },
 
     /** The call log since 00:00 UTC today, or over the last 7 or 30 days (today included). */
-    stats(range: StatsRange, now = new Date()): Stats {
+    stats(range: StatsRange, now = new Date(), visitor?: string): Stats {
       const days = { today: 1, "7d": 7, "30d": 30 }[range];
       const start = new Date(today(now));
       start.setUTCDate(start.getUTCDate() - (days - 1));
       const since = start.toISOString();
+      // With a visitor, only that visitor's calls ("show mine").
+      const mine = visitor ? " AND visitor = $visitor" : "";
+      const params: Scope = visitor ? { since, visitor } : { since };
       const hourly = range === "today";
       // The bucket key is a prefix of started_at: "2026-10-17T05" for an hour, "2026-10-17" for a day.
       const width = hourly ? 13 : 10;
@@ -271,8 +286,8 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
       type Bucket = { at: string; calls: number; failed: number; usd: number };
       const buckets = new Map(
         db
-          .query<Bucket, { since: string }>(`SELECT substr(started_at, 1, ${width}) AS at, ${counts} FROM calls WHERE started_at >= $since GROUP BY at`)
-          .all({ since })
+          .query<Bucket, Scope>(`SELECT substr(started_at, 1, ${width}) AS at, ${counts} FROM calls WHERE started_at >= $since${mine} GROUP BY at`)
+          .all(params)
           .map((row) => [row.at, row]),
       );
       const step = hourly ? 3_600_000 : 86_400_000;
@@ -284,23 +299,23 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
 
       type ModelRow = Omit<CallStats, "p50Ms" | "p95Ms"> & { model: string; provider: string };
       const rows = db
-        .query<ModelRow, { since: string }>(`SELECT model, provider, ${counts},
+        .query<ModelRow, Scope>(`SELECT model, provider, ${counts},
             COUNT(*) FILTER (WHERE error_code = 'aborted') AS aborted,
             COALESCE(SUM(input_tokens), 0) AS inputTokens,
             COALESCE(SUM(output_tokens), 0) AS outputTokens
-          FROM calls WHERE started_at >= $since GROUP BY model, provider ORDER BY calls DESC, model`)
-        .all({ since });
+          FROM calls WHERE started_at >= $since${mine} GROUP BY model, provider ORDER BY calls DESC, model`)
+        .all(params);
       const latencies = db
-        .query<{ model: string; ms: number }, { since: string }>("SELECT model, latency_ms AS ms FROM calls WHERE started_at >= $since AND error_code IS NULL")
-        .all({ since });
+        .query<{ model: string; ms: number }, Scope>(`SELECT model, latency_ms AS ms FROM calls WHERE started_at >= $since AND error_code IS NULL${mine}`)
+        .all(params);
       const byModel = Map.groupBy(latencies, (row) => row.model);
       const models = rows.map((row) => ({ ...row, ...percentiles((byModel.get(row.model) ?? []).map((r) => r.ms)) }));
 
       const people = db
-        .query<{ visitors: number; runs: number }, { since: string }>(
-          "SELECT COUNT(DISTINCT visitor) AS visitors, COUNT(DISTINCT run_id) AS runs FROM calls WHERE started_at >= $since",
+        .query<{ visitors: number; runs: number }, Scope>(
+          `SELECT COUNT(DISTINCT visitor) AS visitors, COUNT(DISTINCT run_id) AS runs FROM calls WHERE started_at >= $since${mine}`,
         )
-        .get({ since });
+        .get(params);
       const sum = (key: "calls" | "failed" | "aborted" | "usd" | "inputTokens" | "outputTokens") => rows.reduce((total, row) => total + row[key], 0);
       const totals = {
         calls: sum("calls"),
@@ -315,14 +330,14 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
       };
 
       const games = db
-        .query<Stats["games"][number], { since: string }>(`SELECT r.game AS game, COUNT(DISTINCT c.run_id) AS runs, COUNT(*) AS calls,
+        .query<Stats["games"][number], Scope>(`SELECT r.game AS game, COUNT(DISTINCT c.run_id) AS runs, COUNT(*) AS calls,
             COALESCE(SUM(c.cost_usd), 0) AS usd
-          FROM calls c JOIN runs r ON r.id = c.run_id WHERE c.started_at >= $since GROUP BY r.game ORDER BY calls DESC, game`)
-        .all({ since });
+          FROM calls c JOIN runs r ON r.id = c.run_id WHERE c.started_at >= $since${mine.replace("visitor", "c.visitor")} GROUP BY r.game ORDER BY calls DESC, game`)
+        .all(params);
       const errors = db
-        .query<Stats["errors"][number], { since: string }>(`SELECT error_code AS code, COUNT(*) AS calls
-          FROM calls WHERE started_at >= $since AND error_code IS NOT NULL GROUP BY error_code ORDER BY calls DESC, code`)
-        .all({ since });
+        .query<Stats["errors"][number], Scope>(`SELECT error_code AS code, COUNT(*) AS calls
+          FROM calls WHERE started_at >= $since AND error_code IS NOT NULL${mine} GROUP BY error_code ORDER BY calls DESC, code`)
+        .all(params);
 
       return { range, since, series, totals, models, games, errors };
     },

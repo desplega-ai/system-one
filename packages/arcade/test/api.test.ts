@@ -48,7 +48,7 @@ function setup({ budget = { dailyUsd: 1, providers: {} }, transcriber, generator
   const get = async (path: keyof typeof api, query = "") =>
     keep(await (api[path] as { GET: (req: Request) => Promise<Response> }).GET(new Request(`http://x${path}${query}`, { headers: { cookie } })));
   const runId = store.createRun("test", {});
-  return { store, api, post, get, runId };
+  return { store, api, post, get, runId, cookie: () => cookie };
 }
 
 const call = callToJson({ state: "A guard sleeps.", questions: { asleep: q.boolean("Is the guard asleep?") } });
@@ -234,6 +234,16 @@ test("/api/stats sums the call log, keeps visitor data out, and checks the range
   expect((await get("/api/stats", "?range=1y")).status).toBe(400);
 });
 
+test("/api/stats?mine=1 counts only this browser's calls", async () => {
+  const { post, get, runId } = setup();
+  await post("/api/decide", { runId, model: "fake:ok", call });
+  await post("/api/decide", { runId, model: "fake:vision", call }, {}, {});
+  expect((await (await get("/api/stats", "?range=today")).json()).totals.calls).toBe(2);
+  const mine = await (await get("/api/stats", "?range=today&mine=1")).json();
+  expect(mine.totals).toMatchObject({ calls: 1, visitors: 1 });
+  expect(mine.models.map((m: { model: string }) => m.model)).toEqual(["fake:ok"]);
+});
+
 describe("/api/live", () => {
   /** Reads server-sent events from a stream, skipping comment lines. */
   function events(res: Response) {
@@ -255,8 +265,22 @@ describe("/api/live", () => {
       }
     };
   }
-  const open = (api: ReturnType<typeof setup>["api"], signal: AbortSignal, ip = "1.2.3.4") =>
-    (api["/api/live"] as { GET: (req: Request) => Response }).GET(new Request("http://x/api/live", { signal, headers: { "fly-client-ip": ip } }));
+  const open = (api: ReturnType<typeof setup>["api"], signal: AbortSignal, ip = "1.2.3.4", query = "", cookie = "") =>
+    (api["/api/live"] as { GET: (req: Request) => Response }).GET(new Request(`http://x/api/live${query}`, { signal, headers: { "fly-client-ip": ip, cookie } }));
+
+  test("?mine=1 follows only this browser's calls", async () => {
+    const { api, post, runId, cookie } = setup();
+    await post("/api/decide", { runId, model: "fake:ok", call });
+    // Another browser: no cookie, so a new visitor.
+    await post("/api/decide", { runId, model: "fake:vision", call }, {}, {});
+    const abort = new AbortController();
+    const next = events(open(api, abort.signal, "1.2.3.4", "?mine=1", cookie()));
+    expect(await next()).toMatchObject({ backlog: true, calls: [{ model: "fake:ok" }], today: { calls: 1 } });
+    await post("/api/decide", { runId, model: "fake:vision", call }, {}, {});
+    await post("/api/decide", { runId, model: "fake:slow", call });
+    expect(await next()).toMatchObject({ backlog: false, calls: [{ model: "fake:slow" }], today: { calls: 2 } });
+    abort.abort();
+  });
 
   test("sends the newest calls, then each new call, without visitor data", async () => {
     const { api, post, runId } = setup();
@@ -278,8 +302,8 @@ describe("/api/live", () => {
   test("caps the open pages per IP", async () => {
     const { api } = setup();
     const abort = new AbortController();
-    const statuses = Array.from({ length: 5 }, () => open(api, abort.signal).status);
-    expect(statuses).toEqual([200, 200, 200, 200, 503]);
+    const statuses = Array.from({ length: 11 }, () => open(api, abort.signal).status);
+    expect(statuses).toEqual([...Array(10).fill(200), 503]);
     expect(open(api, abort.signal, "5.6.7.8").status).toBe(200);
     abort.abort();
   });

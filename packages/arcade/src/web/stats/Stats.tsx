@@ -12,9 +12,9 @@ import { api, type CallStats, type ModelInfo, type Stats as StatsData, type Stat
 import { refreshBudget, useBudget } from "../lib/budget.ts";
 import { hostByKey } from "../ui/brands.ts";
 import { ModelName } from "../ui/ModelName.tsx";
+import { MineToggle, useMine } from "../ui/MineToggle.tsx";
 import { onChip } from "../ui/RankingFilters.tsx";
 import { compact, count, gameLabel, money, ms, percent } from "./format.ts";
-import { LivePanel } from "./Live.tsx";
 
 /** How often each range polls. The server caches today for 4 s and the longer ranges for 15 s. */
 const REFRESH_MS: Record<StatsRange, number> = { today: 5_000, "7d": 30_000, "30d": 30_000 };
@@ -39,6 +39,9 @@ export function Stats({ arg }: { arg?: string }) {
   const [updated, setUpdated] = useState<Date>();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const budget = useBudget();
+  const [mine, setMine] = useMine();
+  /** Whether the shown stats are "mine", so they dim while the other kind loads. */
+  const [shownMine, setShownMine] = useState(mine);
 
   useEffect(() => {
     api.models().then(setModels, () => {});
@@ -47,10 +50,11 @@ export function Stats({ arg }: { arg?: string }) {
   useEffect(() => {
     let live = true;
     const load = () => {
-      api.stats(range.value).then(
+      api.stats(range.value, mine).then(
         (next) => {
           if (!live) return;
           setStats(next);
+          setShownMine(mine);
           setError(undefined);
           setUpdated(new Date());
         },
@@ -64,30 +68,29 @@ export function Stats({ arg }: { arg?: string }) {
       live = false;
       clearInterval(id);
     };
-  }, [range.value]);
+  }, [range.value, mine]);
 
   const label = (key: string) => models.find((m) => m.key === key)?.label ?? key;
-  const stale = stats !== undefined && stats.range !== range.value;
+  const stale = stats !== undefined && (stats.range !== range.value || shownMine !== mine);
 
   return (
     <div className="space-y-5 py-6">
-      <header>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <ChartColumn className="size-5 text-muted-foreground" /> Stats
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Every model call the arcade makes, from the server's log. Days start at 00:00 UTC.</p>
-      </header>
-
-      <LivePanel label={label} />
-
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
-        <h2 className="text-lg font-semibold tracking-tight">Summary</h2>
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+            <ChartColumn className="size-5 text-muted-foreground" /> Stats
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {mine ? "Your calls from this browser" : "Every model call the arcade made"}, from the server's log. Days start at 00:00 UTC.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           {updated && (
             <span className="font-mono text-xs text-muted-foreground">
               updated {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
+          <MineToggle value={mine} onChange={setMine} />
           <ToggleGroup
             type="single"
             variant="outline"
@@ -104,7 +107,7 @@ export function Stats({ arg }: { arg?: string }) {
             ))}
           </ToggleGroup>
         </div>
-      </div>
+      </header>
 
       {error && (
         <Alert variant="destructive">
@@ -117,7 +120,7 @@ export function Stats({ arg }: { arg?: string }) {
         <p className="text-sm text-muted-foreground">Loading the stats.</p>
       ) : (
         <div className={cn("space-y-5 transition-opacity", stale && "opacity-50")}>
-          <Kpis stats={stats} days={range.days} cap={range.value === "today" ? budget?.dailyUsd : undefined} />
+          <Kpis stats={stats} days={range.days} cap={range.value !== "today" ? undefined : mine ? budget?.you?.cap : budget?.dailyUsd} />
           <ChartCard stats={stats} />
           {stats.totals.calls === 0 ? (
             <Card className="items-center gap-2 py-10 text-center">

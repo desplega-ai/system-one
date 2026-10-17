@@ -1,6 +1,7 @@
-// The live feed of the Stats page: each model call, once stored, goes to the open pages as a server-sent
+// The live feed of the Live page: each model call, once stored, goes to the open pages as a server-sent
 // event. Calls go out in batches, at most one event per `flushMs`, so a busy arcade sends few messages.
-// Only what the page shows leaves the server: no visitor ids, no IP hashes, no inputs or outputs.
+// A page can follow everyone or only its own visitor ("mine"). Only what the page shows leaves the
+// server: no visitor ids, no IP hashes, no inputs or outputs.
 import type { RecentCall } from "./store.ts";
 
 export type LiveEvent = {
@@ -14,8 +15,10 @@ export type LiveEvent = {
 };
 
 type Options = {
-  today: () => { calls: number; usd: number };
-  recent: () => RecentCall[];
+  /** Today's totals, of everyone or of one visitor. */
+  today: (visitor?: string) => { calls: number; usd: number };
+  /** The newest calls, oldest first, of everyone or of one visitor. */
+  recent: (visitor?: string) => RecentCall[];
   flushMs?: number;
   heartbeatMs?: number;
   maxBatch?: number;
@@ -25,36 +28,45 @@ type Options = {
 
 const encoder = new TextEncoder();
 
-export function createLive({ today, recent, flushMs = 1000, heartbeatMs = 15_000, maxBatch = 50, maxViewers = 200, maxPerIp = 4 }: Options) {
-  type Viewer = { ip: string; send: (chunk: string) => void };
+export function createLive({ today, recent, flushMs = 1000, heartbeatMs = 15_000, maxBatch = 50, maxViewers = 200, maxPerIp = 10 }: Options) {
+  /** `visitor` is set for a page that shows only its own calls. */
+  type Viewer = { ip: string; visitor?: string; send: (chunk: string) => void };
   const viewers = new Set<Viewer>();
-  let pending: RecentCall[] = [];
+  let pending: { call: RecentCall; visitor?: string }[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
 
   const broadcast = (chunk: string) => {
     for (const viewer of viewers) viewer.send(chunk);
   };
-  const event = (backlog: boolean, calls: RecentCall[]) =>
-    `data: ${JSON.stringify({ backlog, calls, today: today(), viewers: viewers.size } satisfies LiveEvent)}\n\n`;
+  const event = (backlog: boolean, calls: RecentCall[], visitor?: string) =>
+    `data: ${JSON.stringify({ backlog, calls, today: today(visitor), viewers: viewers.size } satisfies LiveEvent)}\n\n`;
   const flush = () => {
     flushTimer = undefined;
-    const calls = pending.slice(-maxBatch);
+    const batch = pending;
     pending = [];
-    if (calls.length > 0) broadcast(event(false, calls));
+    // One event for every page that follows everyone, and one per page that follows only its own calls.
+    let shared: string | undefined;
+    for (const viewer of viewers) {
+      const calls = batch.filter((p) => !viewer.visitor || p.visitor === viewer.visitor).map((p) => p.call).slice(-maxBatch);
+      if (calls.length === 0) continue;
+      if (viewer.visitor) viewer.send(event(false, calls, viewer.visitor));
+      else viewer.send((shared ??= event(false, calls)));
+    }
   };
 
   return {
-    /** Queues one stored call for the next batch. Without viewers, nothing is kept. */
-    push(call: RecentCall) {
+    /** Queues one stored call, made by `visitor`, for the next batch. Without viewers, nothing is kept. */
+    push(call: RecentCall, visitor?: string) {
       if (viewers.size === 0) return;
-      pending.push(call);
-      if (pending.length > maxBatch * 4) pending = pending.slice(-maxBatch);
+      pending.push({ call, visitor });
+      if (pending.length > maxBatch * 20) pending = pending.slice(-maxBatch * 10);
       flushTimer ??= setTimeout(flush, flushMs);
     },
 
-    /** The event stream for one page. A comment line every `heartbeatMs` keeps an idle stream open. */
-    open(ip: string, signal: AbortSignal): Response {
+    /** The event stream for one page, of everyone or of one `visitor`. A comment line every `heartbeatMs`
+     * keeps an idle stream open. */
+    open(ip: string, signal: AbortSignal, visitor?: string): Response {
       const fromIp = [...viewers].filter((v) => v.ip === ip).length;
       if (viewers.size >= maxViewers || fromIp >= maxPerIp) {
         return Response.json({ error: { code: "too_many_viewers", message: "too many live pages open, try again later" } }, { status: 503 });
@@ -73,6 +85,7 @@ export function createLive({ today, recent, flushMs = 1000, heartbeatMs = 15_000
         start(controller) {
           viewer = {
             ip,
+            visitor,
             send: (chunk) => {
               try {
                 controller.enqueue(encoder.encode(chunk));
@@ -83,7 +96,7 @@ export function createLive({ today, recent, flushMs = 1000, heartbeatMs = 15_000
           };
           viewers.add(viewer);
           heartbeat ??= setInterval(() => broadcast(": ping\n\n"), heartbeatMs);
-          viewer.send(event(true, recent()));
+          viewer.send(event(true, recent(visitor), visitor));
         },
         cancel: close,
       });

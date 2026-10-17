@@ -8,6 +8,7 @@ import type { FrameInfo } from "./components/GameFrame.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Home } from "./home/Home.tsx";
 import { ShareCard } from "./home/ShareCard.tsx";
+import { Live } from "./live/Live.tsx";
 import { Stats } from "./stats/Stats.tsx";
 import { StageContext } from "./lib/stage.ts";
 
@@ -97,7 +98,8 @@ export function App() {
   const game = [...games, ...hidden].find((g) => g.path === path);
   const [stage, toggleStage] = useStage(game !== undefined);
   useEffect(() => {
-    document.title = game ? `${game.title} · System One Arcade` : path === "stats" ? "Stats · System One Arcade" : "System One Arcade";
+    const page = game?.title ?? { stats: "Stats", live: "Live" }[path ?? ""];
+    document.title = page ? `${page} · System One Arcade` : "System One Arcade";
   }, [game, path]);
   // #/share is the link preview image, without the site around it.
   if (path === "share") return <ShareCard />;
@@ -110,6 +112,8 @@ export function App() {
             <game.component key={game.path} arg={rest.join("/") || undefined} info={game} />
           ) : path === "stats" ? (
             <Stats arg={rest[0]} />
+          ) : path === "live" ? (
+            <Live />
           ) : (
             <Home games={games} />
           )}

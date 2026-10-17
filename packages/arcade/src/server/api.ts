@@ -108,11 +108,24 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
   };
   const publicMode = budget.visitorUsd !== undefined || budget.ipUsd !== undefined;
   // The Stats page polls, and anyone can open it, so each range is computed at most every 15 s.
-  const statsCache = new Map<StatsRange, { at: number; stats: Stats }>();
-  const statsFor = (range: StatsRange): Stats => {
-    const hit = statsCache.get(range);
+  // Every page polls /api/budget and every call checks the cap, so today's spend is summed at most once a
+  // second. The cap can go over by one second of calls at most.
+  let spendCache: { at: number; spend: ReturnType<Store["spendToday"]> } | undefined;
+  const spendNow = () => {
+    if (!spendCache || Date.now() - spendCache.at >= 1000) spendCache = { at: Date.now(), spend: store.spendToday() };
+    return spendCache.spend;
+  };
+  const statsCache = new Map<string, { at: number; stats: Stats }>();
+  /** The stats of everyone, or of one visitor ("show mine"). */
+  const statsFor = (range: StatsRange, visitor?: string): Stats => {
+    const key = `${range} ${visitor ?? ""}`;
+    const hit = statsCache.get(key);
     if (hit && Date.now() - hit.at < STATS_CACHE_MS[range]) return hit.stats;
-    const raw = store.stats(range);
+    // Each visitor that shows its own stats adds an entry, so old entries go.
+    if (statsCache.size > 1000) {
+      for (const [k, v] of statsCache) if (Date.now() - v.at > STATS_CACHE_MS[range]) statsCache.delete(k);
+    }
+    const raw = store.stats(range, new Date(), visitor);
     const games = new Map<string, Stats["games"][number]>();
     for (const row of raw.games) {
       const game = shownGame(row.game);
@@ -120,12 +133,12 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
       games.set(game, { game, runs: sum.runs + row.runs, calls: sum.calls + row.calls, usd: sum.usd + row.usd });
     }
     const stats = { ...raw, games: [...games.values()].sort((a, b) => b.calls - a.calls) };
-    statsCache.set(range, { at: Date.now(), stats });
+    statsCache.set(key, { at: Date.now(), stats });
     return stats;
   };
   const live = createLive({
-    today: () => store.todayTotals(),
-    recent: () => store.recentCalls(20).map((call) => ({ ...call, game: shownGame(call.game) })),
+    today: (visitor) => store.todayTotals(new Date(), visitor),
+    recent: (visitor) => store.recentCalls(20, visitor).map((call) => ({ ...call, game: shownGame(call.game) })),
   });
   /** Stores a call and sends it to the live feed. */
   const recordCall = (call: CallRecord) => {
@@ -139,7 +152,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
       latencyMs: Math.round(call.latencyMs),
       usd: call.usage?.costUsd ?? null,
       error: call.errorCode ?? null,
-    });
+    }, call.visitor);
   };
   const open = new Map<string, number>();
   /** Takes a slot for one model call, or throws 429. Returns the function that frees it. */
@@ -168,7 +181,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
   };
 
   const requireBudget = (provider: string, who: Who) => {
-    const reason = overBudget(budget, store.spendToday(), provider);
+    const reason = overBudget(budget, spendNow(), provider);
     if (reason) throw new HttpError(429, "budget_exceeded", reason);
     const share = overShare(budget, store.shareToday(who));
     if (share) throw new HttpError(429, "share_exceeded", share);
@@ -318,22 +331,27 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
       // With a share per visitor, `you` holds this visitor's spend today and its cap.
       GET: route((_req, who) => ({
         ...budget,
-        spent: store.spendToday(),
+        spent: spendNow(),
         ...(budget.visitorUsd !== undefined ? { you: { spent: store.shareToday(who).visitor, cap: budget.visitorUsd } } : {}),
       })),
     },
 
     "/api/live": {
-      // Server-sent events: the newest calls first, then each new call within a second.
-      GET: (req: Request) => live.open(whoOf(req).ipHash, req.signal),
+      // Server-sent events: the newest calls first, then each new call within a second. ?mine=1 follows only
+      // the calls of this browser's visitor cookie.
+      GET: (req: Request) => {
+        const who = whoOf(req);
+        return live.open(who.ipHash, req.signal, new URL(req.url).searchParams.get("mine") === "1" ? who.visitor : undefined);
+      },
     },
 
     "/api/stats": {
-      // ?range=today|7d|30d
-      GET: route((req) => {
-        const range = new URL(req.url).searchParams.get("range") ?? "today";
+      // ?range=today|7d|30d, and ?mine=1 for only this browser's calls
+      GET: route((req, who) => {
+        const params = new URL(req.url).searchParams;
+        const range = params.get("range") ?? "today";
         if (!statsRanges.includes(range as StatsRange)) throw new HttpError(400, "invalid_input", `range must be one of: ${statsRanges.join(", ")}`);
-        return statsFor(range as StatsRange);
+        return statsFor(range as StatsRange, params.get("mine") === "1" ? who.visitor : undefined);
       }),
     },
 

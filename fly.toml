@@ -7,7 +7,7 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [env]
-  SYSTEM_ONE_BUDGET = '{"dailyUsd":15,"visitorUsd":0.1,"ipUsd":0.3}'
+  SYSTEM_ONE_BUDGET = '{"dailyUsd":15,"visitorUsd":0.2,"ipUsd":0.3}'
 
 # One volume, so one machine: SQLite lives on it.
 [[mounts]]

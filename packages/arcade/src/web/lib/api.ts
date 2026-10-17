@@ -116,5 +116,6 @@ export const api = {
 
   budget: () => request<BudgetInfo>("/api/budget"),
 
-  stats: (range: StatsRange) => request<Stats>(`/api/stats?range=${range}`),
+  /** `mine` keeps only the calls of this browser's visitor cookie. */
+  stats: (range: StatsRange, mine = false) => request<Stats>(`/api/stats?range=${range}${mine ? "&mine=1" : ""}`),
 };
