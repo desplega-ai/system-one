@@ -20,7 +20,17 @@ export type BudgetInfo = {
   dailyUsd?: number;
   providers: Record<string, number>;
   spent: { total: number; byProvider: Record<string, number> };
+  /** When the server gives each visitor a share: this visitor's spend today, and the cap. */
+  you?: { spent: number; cap: number };
 };
+
+/** Why no more calls can go out today, or undefined. */
+export function budgetSpent(budget: BudgetInfo | undefined): string | undefined {
+  if (!budget) return undefined;
+  if (budget.you && budget.you.spent >= budget.you.cap) return `You used today's free share of $${budget.you.cap}. Come back tomorrow (UTC), or browse the rankings.`;
+  if (budget.dailyUsd !== undefined && budget.spent.total >= budget.dailyUsd) return "The arcade used its budget for today. Come back tomorrow (UTC), or browse the rankings.";
+  return undefined;
+}
 
 export class ApiError extends Error {
   override readonly name = "ApiError";

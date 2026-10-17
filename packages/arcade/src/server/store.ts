@@ -8,6 +8,9 @@ export type CallKind = "decide" | "transcribe" | "generate";
 
 export type CallRecord = {
   runId: string;
+  /** Who made the call: the visitor cookie and a hash of the IP address. Unset for calls without a visitor. */
+  visitor?: string;
+  ipHash?: string;
   kind: CallKind;
   provider: string;
   /** The registry key, for example "cloudflare:clef-flash". */
@@ -59,6 +62,13 @@ const schema = [
   "CREATE INDEX IF NOT EXISTS runs_game ON runs(game)",
 ];
 
+/** Columns added after the first schema. Each runs once, when the column is missing. */
+const added: [table: string, column: string, type: string][] = [
+  ["runs", "visitor", "TEXT"],
+  ["calls", "visitor", "TEXT"],
+  ["calls", "ip_hash", "TEXT"],
+];
+
 export type Store = ReturnType<typeof openStore>;
 
 /** Opens (and creates) the database. Pass ":memory:" in tests. */
@@ -68,26 +78,58 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
   for (const statement of schema) db.run(statement);
+  for (const [table, column, type] of added) {
+    const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+    if (!columns.some((c) => c.name === column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+  db.run("CREATE INDEX IF NOT EXISTS calls_visitor ON calls(visitor, started_at)");
+  db.run("CREATE INDEX IF NOT EXISTS calls_ip_hash ON calls(ip_hash, started_at)");
 
-  const insertRun = db.query("INSERT INTO runs (id, game, created_at, config) VALUES ($id, $game, $createdAt, $config)");
-  const selectRun = db.query<{ id: string }, { id: string }>("SELECT id FROM runs WHERE id = $id");
+  const insertRun = db.query("INSERT INTO runs (id, game, created_at, config, visitor) VALUES ($id, $game, $createdAt, $config, $visitor)");
+  const selectRun = db.query<{ id: string; visitor: string | null }, { id: string }>("SELECT id, visitor FROM runs WHERE id = $id");
+  const selectScored = db.query<{ n: number }, { runId: string }>("SELECT COUNT(*) AS n FROM scores WHERE run_id = $runId");
   const insertCall = db.query(`INSERT INTO calls
-    (id, run_id, kind, provider, model, started_at, latency_ms, input_tokens, output_tokens, cost_usd, cost_source, input, output, error_code)
-    VALUES ($id, $runId, $kind, $provider, $model, $startedAt, $latencyMs, $inputTokens, $outputTokens, $costUsd, $costSource, $input, $output, $errorCode)`);
+    (id, run_id, kind, provider, model, started_at, latency_ms, input_tokens, output_tokens, cost_usd, cost_source, input, output, error_code, visitor, ip_hash)
+    VALUES ($id, $runId, $kind, $provider, $model, $startedAt, $latencyMs, $inputTokens, $outputTokens, $costUsd, $costSource, $input, $output, $errorCode, $visitor, $ipHash)`);
+  const selectVisitorSpend = db.query<{ usd: number }, { since: string; visitor: string }>(
+    "SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE visitor = $visitor AND started_at >= $since",
+  );
+  const selectIpSpend = db.query<{ usd: number }, { since: string; ipHash: string }>(
+    "SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE ip_hash = $ipHash AND started_at >= $since",
+  );
+  const today = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const insertScore = db.query("INSERT INTO scores (run_id, model, metric, value) VALUES ($runId, $model, $metric, $value)");
   const selectSpend = db.query<{ provider: string; usd: number }, { since: string }>(
     "SELECT provider, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since GROUP BY provider",
   );
 
   return {
-    createRun(game: string, config: JsonValue): string {
+    createRun(game: string, config: JsonValue, visitor: string | null = null): string {
       const id = crypto.randomUUID();
-      insertRun.run({ id, game, createdAt: new Date().toISOString(), config: JSON.stringify(config) });
+      insertRun.run({ id, game, createdAt: new Date().toISOString(), config: JSON.stringify(config), visitor });
       return id;
     },
 
     hasRun(id: string): boolean {
       return selectRun.get({ id }) !== null;
+    },
+
+    /** The visitor that created the run, or null for runs made without one. */
+    runOwner(id: string): string | null {
+      return selectRun.get({ id })?.visitor ?? null;
+    },
+
+    hasScores(runId: string): boolean {
+      return (selectScored.get({ runId })?.n ?? 0) > 0;
+    },
+
+    /** Today's spend of one visitor, and of one IP hash. */
+    shareToday(who: { visitor: string; ipHash: string }, now = new Date()): { visitor: number; ip: number } {
+      const since = today(now);
+      return {
+        visitor: selectVisitorSpend.get({ since, visitor: who.visitor })?.usd ?? 0,
+        ip: selectIpSpend.get({ since, ipHash: who.ipHash })?.usd ?? 0,
+      };
     },
 
     recordCall(call: CallRecord): void {
@@ -106,6 +148,8 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
         input: JSON.stringify(call.input ?? null),
         output: JSON.stringify(call.output ?? null),
         errorCode: call.errorCode ?? null,
+        visitor: call.visitor ?? null,
+        ipHash: call.ipHash ?? null,
       });
     },
 
@@ -117,7 +161,7 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
 
     /** Spend since 00:00 UTC today. */
     spendToday(now = new Date()): Spend {
-      const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+      const since = today(now);
       const byProvider = Object.fromEntries(selectSpend.all({ since }).map((r) => [r.provider, r.usd]));
       return { total: Object.values(byProvider).reduce((a, b) => a + b, 0), byProvider };
     },

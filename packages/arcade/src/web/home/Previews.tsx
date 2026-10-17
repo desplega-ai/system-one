@@ -1,5 +1,5 @@
-// Home page previews: the real game renderers, played by fake answers. They make no API calls and
-// show color names, not model names, because no model plays here.
+// Home page previews: the real game renderers, played by fake answers. They make no API calls, so each
+// preview carries a "simulated" badge: the logos show who could play, not what they did.
 import type { Usage } from "@system-one/ai";
 import { useEffect, useRef } from "react";
 import { createMatch, createRng, isOver, type Match, playTick, type Turn as ArenaTurn } from "../../games/arena/engine.ts";
@@ -9,6 +9,10 @@ import market from "../../games/attention/images/market.jpg";
 import { drawPicture, drawZoom, glide as glideAttention, type Shown } from "../../games/attention/render.ts";
 import { cells } from "../lib/media.ts";
 import { useElementWidth } from "../lib/hooks.ts";
+import cloudflareLogo from "../logos/cloudflare.svg";
+import openaiLogo from "../logos/openai.svg";
+import typesafeLogo from "../logos/typesafe.png";
+import { logoImage } from "../ui/brands.ts";
 
 const usage: Usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, costSource: "list-price" };
 
@@ -44,7 +48,16 @@ function guess<T extends string>(options: readonly T[], rng: () => number): { ch
   return { choice, probabilities };
 }
 
-/** Four agents on the ring. A turn every 700 ms, and a new match 2 s after one ends. */
+/** The preview's players: a logo and a name each, in agent order (red, blue, green, yellow). */
+const players = [
+  { name: "Jev", logo: typesafeLogo },
+  { name: "Clef Flash", logo: cloudflareLogo },
+  { name: "GPT-6 Luna", logo: openaiLogo },
+  { name: "Clef", logo: cloudflareLogo },
+];
+const ids = ["red", "blue", "green", "yellow"];
+
+/** Four agents on the ring at real-time speed: a turn every 250 ms, and a new match 1.5 s after one ends. */
 export function ArenaPreview() {
   const [box, width] = useElementWidth<HTMLDivElement>();
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -52,10 +65,10 @@ export function ArenaPreview() {
 
   useAnimation((now) => {
     const s = state.current;
-    if (!s.match) s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 60 });
+    if (!s.match) s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
     if (now >= s.next) {
       if (isOver(s.match)) {
-        s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 60 });
+        s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
         s.shown = emptyShown();
       } else {
         const standing = s.match.agents.filter((a) => a.hp > 0);
@@ -74,17 +87,20 @@ export function ArenaPreview() {
         }
         s.match = playTick(s.match, turns, "sample", s.rng);
       }
-      s.next = now + (isOver(s.match) ? 2000 : 700);
+      s.next = now + (isOver(s.match) ? 1500 : 250);
     }
     const size = Math.round((width * 10) / 16);
     if (!canvas.current || size === 0) return;
     s.shown = glideArena(s.shown, s.match, now);
-    drawArena(canvas.current, s.match, {}, s.shown, now, size);
+    const labels = Object.fromEntries(ids.map((id, i) => [id, players[i]!.name]));
+    const logos = Object.fromEntries(ids.map((id, i) => [id, logoImage(players[i]!.logo)]));
+    drawArena(canvas.current, s.match, labels, s.shown, now, size, logos);
   });
 
   return (
-    <div ref={box} className="flex aspect-[16/10] items-center justify-center bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)]">
+    <div ref={box} className="relative flex aspect-[16/10] items-center justify-center bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)]">
       <canvas ref={canvas} />
+      <Simulated />
     </div>
   );
 }
@@ -144,7 +160,8 @@ export function AttentionPreview() {
 
   const colors = ["#ff5d52", "#4f8cff", "#34d27b"];
   return (
-    <div ref={box} className="flex aspect-[16/10] items-center justify-center gap-2 bg-black/40">
+    <div ref={box} className="relative flex aspect-[16/10] items-center justify-center gap-2 bg-black/40">
+      <Simulated />
       <canvas ref={main} className="rounded-lg" />
       <div className="flex flex-col gap-2">
         {colors.map((color, i) => (
@@ -160,4 +177,9 @@ export function AttentionPreview() {
       </div>
     </div>
   );
+}
+
+/** Says that the preview plays fake answers. */
+function Simulated() {
+  return <span className="caps absolute top-3 left-3 rounded bg-black/60 px-1.5 py-0.5 text-[9px] text-muted-foreground">simulated</span>;
 }

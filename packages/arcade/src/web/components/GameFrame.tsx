@@ -6,6 +6,9 @@ import { type ComponentType, type ReactNode, useContext, useEffect, useRef, useS
 import { Button } from "@/web/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/web/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/tooltip";
+import { Alert, AlertDescription, AlertTitle } from "@/web/components/ui/alert";
+import { budgetSpent } from "../lib/api.ts";
+import { refreshBudget, useBudget } from "../lib/budget.ts";
 import { StageContext } from "../lib/stage.ts";
 import { makerOf } from "../ui/brands.ts";
 import { Hud, type RunStats } from "../ui/Hud.tsx";
@@ -62,8 +65,18 @@ const Kbd = ({ children }: { children: ReactNode }) => (
 export function GameFrame({ info, controls, stats, players, subtitle, progress, live, board, children }: Props) {
   const [tab, setTab] = useState("game");
   const { stage, toggle } = useContext(StageContext);
+  // Out of budget: no new game can start, and the page says why.
+  const spentOut = budgetSpent(useBudget());
+  if (spentOut && controls.status !== "running" && controls.status !== "paused") controls = { ...controls, canStart: false };
   const latest = useRef(controls);
   latest.current = controls;
+
+  // While a game runs, the spend in the top bar follows it.
+  useEffect(() => {
+    if (controls.status !== "running") return;
+    const timer = setInterval(refreshBudget, 10_000);
+    return () => clearInterval(timer);
+  }, [controls.status]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -121,6 +134,12 @@ export function GameFrame({ info, controls, stats, players, subtitle, progress, 
         </div>
         {/* Both tabs stay mounted: the game keeps its canvases, its camera and its loops while the ranking shows. */}
         <TabsContent value="game" forceMount className="space-y-4 data-[state=inactive]:hidden">
+          {spentOut && (
+            <Alert>
+              <AlertTitle>No more calls today</AlertTitle>
+              <AlertDescription>{spentOut}</AlertDescription>
+            </Alert>
+          )}
           {children}
         </TabsContent>
         <TabsContent value="ranking" forceMount className="data-[state=inactive]:hidden">

@@ -1,0 +1,33 @@
+# The arcade on Fly.io: one machine in Ashburn (iad), close to the US model APIs, with SQLite on a volume.
+# Keys are Fly secrets (fly secrets import < .env). The budget gives each visitor a small daily share.
+app = "system-one-arcade"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  SYSTEM_ONE_BUDGET = '{"dailyUsd":5,"visitorUsd":0.05,"ipUsd":0.15}'
+
+# One volume, so one machine: SQLite lives on it.
+[[mounts]]
+  source = "arcade_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/models"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

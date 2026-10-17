@@ -12,7 +12,7 @@ import {
 } from "@system-one/ai";
 import { cheapModels, gatewayCostUsd, generateText, transcribe } from "@system-one/ai/generate";
 import type { BunRequest } from "bun";
-import { type Budget, overBudget } from "./budget.ts";
+import { type Budget, overBudget, overShare } from "./budget.ts";
 import type { ModelEntry } from "./models.ts";
 import { redact, type Score, type Store, fingerprint } from "./store.ts";
 
@@ -91,9 +91,11 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     if (!entry) throw new HttpError(400, "unknown_model", `model must be one of: ${[...modelsByKey.keys()].join(", ")}`);
     return entry;
   };
-  const requireBudget = (provider: string) => {
+  const requireBudget = (provider: string, who: Who) => {
     const reason = overBudget(budget, store.spendToday(), provider);
     if (reason) throw new HttpError(429, "budget_exceeded", reason);
+    const share = overShare(budget, store.shareToday(who));
+    if (share) throw new HttpError(429, "share_exceeded", share);
   };
 
   return {
@@ -102,17 +104,21 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     },
 
     "/api/runs": {
-      POST: route(async (req) => {
+      POST: route(async (req, who) => {
         const { game, config = {} } = await body(req);
         if (typeof game !== "string" || !idPattern.test(game)) throw new HttpError(400, "invalid_input", "game must match [a-z0-9-]{1,40}");
         if (JSON.stringify(config).length > 10_000) throw new HttpError(400, "invalid_input", "config is larger than 10,000 characters");
-        return { id: store.createRun(game, config as JsonValue) };
+        return { id: store.createRun(game, config as JsonValue, who.visitor) };
       }),
     },
 
     "/api/runs/:id/scores": {
-      POST: route(async (req) => {
+      POST: route(async (req, who) => {
         const runId = requireRun((req as BunRequest<"/api/runs/:id/scores">).params.id);
+        // A run takes scores once, and only from the visitor that made it, so nobody can stuff the rankings.
+        const owner = store.runOwner(runId);
+        if (owner !== null && owner !== who.visitor) throw new HttpError(403, "not_your_run", "only the visitor that created the run can score it");
+        if (store.hasScores(runId)) throw new HttpError(409, "already_scored", "this run has its scores");
         const { scores } = await body(req);
         if (!Array.isArray(scores) || scores.length > 1000) throw new HttpError(400, "invalid_input", "scores must be an array of at most 1000 rows");
         const rows = scores.map((s: unknown): Score => {
@@ -128,7 +134,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     },
 
     "/api/decide": {
-      POST: route(async (req) => {
+      POST: route(async (req, who) => {
         const json = await body(req);
         const runId = requireRun(json.runId);
         const entry = requireModel(json.model);
@@ -136,11 +142,11 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         for (const input of inputsOf(call.state)) {
           if (!entry.inputs.includes(input)) throw new HttpError(400, "unsupported_input", `${entry.key} does not take ${input} input`);
         }
-        requireBudget(entry.model.provider);
+        requireBudget(entry.model.provider, who);
 
         const startedAt = new Date();
         const t0 = performance.now();
-        const record = { runId, kind: "decide" as const, provider: entry.model.provider, model: entry.key, startedAt, input: redact(callToJson(call)) };
+        const record = { runId, ...whoFields(who), kind: "decide" as const, provider: entry.model.provider, model: entry.key, startedAt, input: redact(callToJson(call)) };
         try {
           const result = await entry.model.decide({ ...call, signal: req.signal });
           const latencyMs = Math.round(performance.now() - t0);
@@ -154,16 +160,16 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     },
 
     "/api/transcribe": {
-      POST: route(async (req) => {
+      POST: route(async (req, who) => {
         const json = await body(req);
         const runId = requireRun(json.runId);
         if (typeof json.audio !== "string") throw new HttpError(400, "invalid_input", "audio must be a data URL");
         const clip = audio(json.audio);
-        requireBudget("gateway");
+        requireBudget("gateway", who);
 
         const startedAt = new Date();
         const t0 = performance.now();
-        const record = { runId, kind: "transcribe" as const, provider: "gateway", model: cheapModels.transcription, startedAt, input: { $audio: fingerprint(clip.dataUrl) } };
+        const record = { runId, ...whoFields(who), kind: "transcribe" as const, provider: "gateway", model: cheapModels.transcription, startedAt, input: { $audio: fingerprint(clip.dataUrl) } };
         try {
           const result = await transcriber(clip, req.signal);
           const latencyMs = Math.round(performance.now() - t0);
@@ -177,18 +183,18 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     },
 
     "/api/generate": {
-      POST: route(async (req) => {
+      POST: route(async (req, who) => {
         const json = await body(req);
         const runId = requireRun(json.runId);
         const { system = "", prompt } = json;
         if (typeof prompt !== "string" || prompt.length === 0 || prompt.length > 4000 || typeof system !== "string" || system.length > 2000) {
           throw new HttpError(400, "invalid_input", "prompt must be a string of 1 to 4,000 characters, and system at most 2,000");
         }
-        requireBudget("gateway");
+        requireBudget("gateway", who);
 
         const startedAt = new Date();
         const t0 = performance.now();
-        const record = { runId, kind: "generate" as const, provider: "gateway", model: cheapModels.text, startedAt, input: { system, prompt } };
+        const record = { runId, ...whoFields(who), kind: "generate" as const, provider: "gateway", model: cheapModels.text, startedAt, input: { system, prompt } };
         try {
           const result = await generator({ system, prompt }, req.signal);
           const latencyMs = Math.round(performance.now() - t0);
@@ -219,7 +225,12 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     },
 
     "/api/budget": {
-      GET: route(() => ({ ...budget, spent: store.spendToday() })),
+      // With a share per visitor, `you` holds this visitor's spend today and its cap.
+      GET: route((_req, who) => ({
+        ...budget,
+        spent: store.spendToday(),
+        ...(budget.visitorUsd !== undefined ? { you: { spent: store.shareToday(who).visitor, cap: budget.visitorUsd } } : {}),
+      })),
     },
 
     "/api/*": route(() => {
@@ -228,25 +239,52 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
   };
 }
 
-/** Wraps a handler: its return value becomes JSON, and errors become JSON errors with a status. */
-function route(handler: (req: Request) => unknown) {
+/** Who calls: a visitor id from a cookie (new on the first call) and a hash of the IP address. */
+export type Who = { visitor: string; ipHash: string; isNew: boolean };
+
+const VISITOR_COOKIE = "s1v";
+// The salt keeps raw IP addresses out of the database. Without SYSTEM_ONE_SALT it changes on each restart.
+const salt = process.env.SYSTEM_ONE_SALT ?? crypto.randomUUID();
+const secureCookie = process.env.NODE_ENV === "production";
+
+function whoOf(req: Request): Who {
+  const visitor = new RegExp(`(?:^|;\\s*)${VISITOR_COOKIE}=([0-9a-f-]{36})(?:;|$)`).exec(req.headers.get("cookie") ?? "")?.[1];
+  // Fly sets Fly-Client-IP. Behind another proxy, the first X-Forwarded-For address.
+  const ip = req.headers.get("fly-client-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const ipHash = new Bun.CryptoHasher("sha256").update(`${salt}:${ip}`).digest("hex").slice(0, 24);
+  return visitor ? { visitor, ipHash, isNew: false } : { visitor: crypto.randomUUID(), ipHash, isNew: true };
+}
+
+const whoFields = (who: Who) => ({ visitor: who.visitor, ipHash: who.ipHash });
+
+/** Wraps a handler: its return value becomes JSON, and errors become JSON errors with a status. A new visitor gets its cookie. */
+function route(handler: (req: Request, who: Who) => unknown) {
   return async (req: Request): Promise<Response> => {
-    try {
-      return Response.json(await handler(req));
-    } catch (error) {
-      const [status, code] =
-        error instanceof HttpError
-          ? [error.status, error.code]
-          : error instanceof TypeError || error instanceof SyntaxError
-            ? [400, "invalid_input"]
-            : error instanceof DecisionError
-              ? [502, error.code]
-              : [500, "internal"];
-      if (status === 500) console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
-      return Response.json({ error: { code, message } }, { status });
+    const who = whoOf(req);
+    const res = await respond(req, who, handler);
+    if (who.isNew) {
+      res.headers.append("Set-Cookie", `${VISITOR_COOKIE}=${who.visitor}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secureCookie ? "; Secure" : ""}`);
     }
+    return res;
   };
+}
+
+async function respond(req: Request, who: Who, handler: (req: Request, who: Who) => unknown): Promise<Response> {
+  try {
+    return Response.json(await handler(req, who));
+  } catch (error) {
+    const [status, code] =
+      error instanceof HttpError
+        ? [error.status, error.code]
+        : error instanceof TypeError || error instanceof SyntaxError
+          ? [400, "invalid_input"]
+          : error instanceof DecisionError
+            ? [502, error.code]
+            : [500, "internal"];
+    if (status === 500) console.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    return Response.json({ error: { code, message } }, { status });
+  }
 }
 
 async function body(req: Request): Promise<Record<string, unknown>> {

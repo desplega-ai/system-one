@@ -57,7 +57,7 @@ const talk: Record<Lang, { greeting: string; none: string; sorry: string; sayAga
 };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budget_exceeded";
+const isBudgetError = (e: unknown) => e instanceof ApiError && (e.code === "budget_exceeded" || e.code === "share_exceeded");
 /** The model name in the scores. The same model can listen on both paths in one run. */
 const scoreKey = (l: Listener) => (l.via === "audio" ? l.model : `${l.model} (transcript)`);
 const pct = (p: number | undefined) => `${Math.round((p ?? 0) * 100)}%`;

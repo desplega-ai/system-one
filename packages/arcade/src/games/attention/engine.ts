@@ -25,8 +25,11 @@ export type Mode = "still" | "live";
 export type Move = "deeper" | "out" | "stop" | "stay";
 export const interestLevels = ["boring", "mild", "interesting", "fascinating"] as const;
 export type InterestLevel = (typeof interestLevels)[number];
-/** One emoji per interest level, for the cards, the picture and the ranking. */
-export const reactions: Record<InterestLevel, string> = { boring: "😐", mild: "🙂", interesting: "😮", fascinating: "🤩" };
+/** One emoji per interest level, for the cards, the picture and the ranking. Four shapes, not four round faces,
+ * so they stay apart at 20 px. */
+export const reactions: Record<InterestLevel, string> = { boring: "😴", mild: "🤔", interesting: "👀", fascinating: "🤯" };
+/** Each level's own tint, for the pills behind the emoji. None of them is an agent color. */
+export const reactionTints: Record<InterestLevel, string> = { boring: "#8b929c", mild: "#38bdf8", interesting: "#f59e0b", fascinating: "#ec4899" };
 
 /** One answered turn, as the judge sees it again in its memory. */
 export type Step = {

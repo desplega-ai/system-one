@@ -40,15 +40,17 @@ export function TopBar({ links, active }: { links: NavLink[]; active?: string })
 }
 
 function BudgetPill({ budget }: { budget: BudgetInfo }) {
-  const cap = budget.dailyUsd;
-  const share = cap ? Math.min(1, budget.spent.total / cap) : 0;
+  // A public site shows each visitor its own share. A private one shows the whole day's spend.
+  const spent = budget.you ? budget.you.spent : budget.spent.total;
+  const cap = budget.you ? budget.you.cap : budget.dailyUsd;
+  const share = cap ? Math.min(1, spent / cap) : 0;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div className="ml-auto flex shrink-0 items-center gap-3 rounded-full border px-3 py-1 font-mono text-xs tabular-nums text-muted-foreground">
           <span>
-            <span className="hidden sm:inline">today </span>
-            {dollars(budget.spent.total)}
+            <span className="hidden sm:inline">{budget.you ? "your share " : "today "}</span>
+            {dollars(spent)}
             {cap !== undefined && <span className="opacity-60"> / {dollars(cap)}</span>}
           </span>
           {cap !== undefined && (
@@ -58,7 +60,11 @@ function BudgetPill({ budget }: { budget: BudgetInfo }) {
           )}
         </div>
       </TooltipTrigger>
-      <TooltipContent>What the model calls cost today. The server refuses calls above the daily cap.</TooltipContent>
+      <TooltipContent className="max-w-xs">
+        {budget.you
+          ? `Model calls cost money, so each visitor gets $${budget.you.cap} a day. It is enough for a few webcam sessions or about ten matches.`
+          : "What the model calls cost today. The server refuses calls above the daily cap."}
+      </TooltipContent>
     </Tooltip>
   );
 }

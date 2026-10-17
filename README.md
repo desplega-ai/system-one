@@ -111,7 +111,9 @@ Errors are `{error: {code, message}}`: 400 for bad input, 429 `budget_exceeded`,
 
 The database has 3 tables: `runs`, `calls` (every decide, transcribe and generate call, with tokens, cost, latency and error code) and `scores` (one row per agent and metric). Images and audio are stored only as a sha256 hash and a size.
 
-Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429, and the Arena pauses.
+Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429 (`budget_exceeded`), and the game pauses.
+
+A public site also caps each visitor: `"visitorUsd":0.05` per visitor cookie (`s1v`, made on the first API call) and `"ipUsd":0.15` per IP address, so clearing the cookie does not reset the share. Over a share, a call fails with 429 `share_exceeded`, and the page says to come back tomorrow. The database keeps a salted hash of the IP (`SYSTEM_ONE_SALT`), not the address. A run takes scores once, and only from the visitor that created it.
 
 Arena: 2 to 6 models on a field. Each turn every model answers `move`, `target` and `fire`. Two fields:
 
@@ -210,6 +212,18 @@ agent-browser --args "--use-fake-ui-for-media-stream,--use-fake-device-for-media
 ```
 
 Close agent-browser first (`agent-browser close`): `--args` applies only when it launches Chrome. On macOS the fake mic stays silent without `--disable-features=AudioServiceOutOfProcess`, because the sandboxed audio service cannot read the file.
+
+### Deploy (Fly.io)
+
+The arcade runs on Fly as `system-one-arcade` in the `desplega` org: one machine in `iad` (Ashburn), close to the US model APIs, with SQLite on the `arcade_data` volume. `fly.toml` sets the budget for a public site.
+
+```sh
+fly apps create system-one-arcade --org desplega
+fly volumes create arcade_data --app system-one-arcade --region iad --size 1 --yes
+fly secrets import --app system-one-arcade --stage < .env          # the provider keys
+echo "SYSTEM_ONE_SALT=$(openssl rand -hex 16)" | fly secrets import --app system-one-arcade --stage
+fly deploy                                                          # later deploys: only this
+```
 
 ### Docker
 

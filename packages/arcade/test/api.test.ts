@@ -33,12 +33,19 @@ function setup({ budget = { dailyUsd: 1, providers: {} }, transcriber, generator
     entry("fake:odd", fakeModel("odd", () => { throw new DecisionError("bad_response", "odd", "no answer", { usage }); })),
   ];
   const api = createApi({ store, models, budget, transcriber, generator });
-  const post = (path: keyof typeof api, json: unknown, params: Record<string, string> = {}) => {
-    const route = api[path] as { POST: (req: Request) => Promise<Response> };
-    const req = Object.assign(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(json) }), { params });
-    return route.POST(req as BunRequest);
+  // One browser: the first response sets the visitor cookie, and later requests send it back.
+  let cookie = "";
+  const keep = (res: Response) => {
+    cookie ||= res.headers.get("set-cookie")?.split(";")[0] ?? "";
+    return res;
   };
-  const get = (path: keyof typeof api, query = "") => (api[path] as { GET: (req: Request) => Promise<Response> }).GET(new Request(`http://x${path}${query}`));
+  const post = async (path: keyof typeof api, json: unknown, params: Record<string, string> = {}, headers?: Record<string, string>) => {
+    const route = api[path] as { POST: (req: Request) => Promise<Response> };
+    const req = Object.assign(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(json), headers: headers ?? { cookie } }), { params });
+    return keep(await route.POST(req as BunRequest));
+  };
+  const get = async (path: keyof typeof api, query = "") =>
+    keep(await (api[path] as { GET: (req: Request) => Promise<Response> }).GET(new Request(`http://x${path}${query}`, { headers: { cookie } })));
   const runId = store.createRun("test", {});
   return { store, api, post, get, runId };
 }
@@ -87,6 +94,19 @@ describe("/api/decide", () => {
     expect((await res.json()).error.code).toBe("budget_exceeded");
   });
 
+  test("each visitor has its own share, and /api/budget reports it", async () => {
+    const { post, get, runId } = setup({ budget: { dailyUsd: 1, providers: {}, visitorUsd: 0.00005 } });
+    expect((await post("/api/decide", { runId, model: "fake:ok", call })).status).toBe(200);
+    expect((await post("/api/decide", { runId, model: "fake:ok", call })).status).toBe(200);
+    // 2 calls of $0.00003 put this visitor over $0.00005.
+    const over = await post("/api/decide", { runId, model: "fake:ok", call });
+    expect(over.status).toBe(429);
+    expect((await over.json()).error.code).toBe("share_exceeded");
+    expect((await (await get("/api/budget")).json()).you).toEqual({ spent: expect.closeTo(0.00006, 10), cap: 0.00005 });
+    // Another visitor still has its share.
+    expect((await post("/api/decide", { runId, model: "fake:ok", call }, {}, { cookie: "s1v=00000000-0000-4000-8000-000000000000" })).status).toBe(200);
+  });
+
   test("returns 502 for a provider error and stores the failed call with its usage", async () => {
     const { post, store, runId } = setup();
     const down = await post("/api/decide", { runId, model: "fake:down", call });
@@ -115,6 +135,15 @@ describe("runs, scores and rankings", () => {
     expect(await (await get("/api/rankings", "?game=arena-lockstep,arena-realtime&config.policy=top")).json()).toHaveLength(1);
     expect(await (await get("/api/rankings", "?game=arena-lockstep&config.policy=sample")).json()).toEqual([]);
     expect((await get("/api/rankings", "?game=arena-lockstep&config.bad-key=1")).status).toBe(400);
+  });
+
+  test("a run takes scores once, and only from the visitor that made it", async () => {
+    const { post } = setup();
+    const { id } = await (await post("/api/runs", { game: "arena-lockstep", config: {} })).json();
+    const scores = { scores: [{ model: "fake:ok", metric: "win", value: 1 }] };
+    expect((await post("/api/runs/:id/scores", scores, { id }, { cookie: "s1v=00000000-0000-4000-8000-000000000000" })).status).toBe(403);
+    expect((await post("/api/runs/:id/scores", scores, { id })).status).toBe(200);
+    expect((await post("/api/runs/:id/scores", scores, { id })).status).toBe(409);
   });
 
   test("rejects a bad game name, bad scores and an unknown run", async () => {

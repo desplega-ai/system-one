@@ -1,5 +1,6 @@
 import { decisionStream } from "@system-one/ai";
 import { cn } from "cn";
+import { CircleDashed, Crosshair, Dices, Footprints, Grid3x3, Hash, Hourglass, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/web/components/ui/alert";
 import { Card } from "@/web/components/ui/card";
@@ -36,7 +37,7 @@ const REALTIME_SECONDS = 60;
 const realtimeMaxTicks = (field: Field) => Math.round((REALTIME_SECONDS * 1000) / field.realtimeTickMs);
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budget_exceeded";
+const isBudgetError = (e: unknown) => e instanceof ApiError && (e.code === "budget_exceeded" || e.code === "share_exceeded");
 
 /** `arg` is a preset id from the URL, for example #/arena/standoff. */
 export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
@@ -424,48 +425,48 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
               <ToggleGroup type="single" variant="outline" size="sm" value={fieldId} onValueChange={(v) => v && setFieldId(v as FieldId)}>
                 <Tip text="Agents stand on a ring and step along it. Shots hit at once, with a chance that drops with distance.">
                   <ToggleGroupItem value="ring" className={onChip}>
-                    Ring
+                    <CircleDashed /> Ring
                   </ToggleGroupItem>
                 </Tip>
                 <Tip text="A square field. Agents step in 12 directions, walls and other agents block them, and shots fly for a few ticks, so they can be dodged.">
                   <ToggleGroupItem value="plane" className={onChip}>
-                    Plane
+                    <Grid3x3 /> Plane
                   </ToggleGroupItem>
                 </Tip>
               </ToggleGroup>
               <ToggleGroup type="single" variant="outline" size="sm" value={clock} onValueChange={(v) => v && setClock(v as Clock)}>
                 <Tip text="The server waits for every model, then the turn resolves. Fair turns.">
                   <ToggleGroupItem value="lockstep" className={onChip}>
-                    Lockstep
+                    <Footprints /> Lockstep
                   </ToggleGroupItem>
                 </Tip>
                 <Tip text="Each model acts when its answer lands. Speed counts.">
                   <ToggleGroupItem value="realtime" className={onChip}>
-                    Real-time
+                    <Zap /> Real-time
                   </ToggleGroupItem>
                 </Tip>
               </ToggleGroup>
               <ToggleGroup type="single" variant="outline" size="sm" value={policy} onValueChange={(v) => v && setPolicy(v as Policy)}>
                 <Tip text="Draw each action from the model's probabilities.">
                   <ToggleGroupItem value="sample" className={onChip}>
-                    Sample
+                    <Dices /> Sample
                   </ToggleGroupItem>
                 </Tip>
                 <Tip text="Always take the most likely action.">
                   <ToggleGroupItem value="top" className={onChip}>
-                    Top answer
+                    <Crosshair /> Top answer
                   </ToggleGroupItem>
                 </Tip>
               </ToggleGroup>
               <Tip text="The seed for the random draws: who starts where, which shots hit, and the sampled actions.">
                 <label className="flex items-center gap-2">
-                  Seed
+                  <Hash className="size-4" /> Seed
                   <input type="number" className={numberInput} value={seed} onChange={(e) => setSeed(Number(e.target.value))} />
                 </label>
               </Tip>
               <Tip text="The match ends in a draw when nobody fires for this many turns in a row. The models know the rule.">
                 <label className="flex items-center gap-2">
-                  Draw after
+                  <Hourglass className="size-4" /> Draw after
                   <input
                     type="number"
                     min={1}

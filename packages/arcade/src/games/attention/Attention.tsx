@@ -38,6 +38,7 @@ import {
   playRound,
   scores,
   reactions,
+  reactionTints,
   type Turn,
 } from "./engine.ts";
 import { attentionImages } from "./images.ts";
@@ -73,7 +74,7 @@ const zoomPx = () => (window.innerWidth < 640 ? 96 : 120);
 const preferredJudges = ["cloudflare:clef-flash", "typesafe:jev-latest", "openai:gpt-6-luna"];
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budget_exceeded";
+const isBudgetError = (e: unknown) => e instanceof ApiError && (e.code === "budget_exceeded" || e.code === "share_exceeded");
 
 /**
  * The call for one judge, built from the current picture or video frame.
@@ -652,17 +653,27 @@ function JudgeCard({ judge, mode, label, waiting, canvasRef }: { judge: Judge; m
   );
 }
 
-/** Four segments, lit up to the level the judge picked. */
+/** The reaction as a big emoji on a tinted pill that pops when it changes, and four segments lit up to the level. */
 function InterestMeter({ answer, color }: { answer: Answer | undefined; color: string }) {
-  const level = answer?.type === "score" ? answer.level : undefined;
-  const lit = level === undefined ? -1 : interestLevels.indexOf(level as (typeof interestLevels)[number]);
+  const level = answer?.type === "score" ? (answer.level as InterestLevel) : undefined;
+  const lit = level === undefined ? -1 : interestLevels.indexOf(level);
   return (
-    <div className="space-y-1">
-      <div className="flex items-baseline justify-between">
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
         <span className="caps text-[10px] text-muted-foreground">interest</span>
-        <span className="text-xs font-medium">
-          {level ? `${reactions[level as InterestLevel]} ${level}` : answer?.type === "refusal" ? "refused" : "waiting"}
-        </span>
+        {level ? (
+          // The key remounts the pill on each new level, so the pop plays again.
+          <span
+            key={level}
+            className="flex items-center gap-1.5 rounded-full py-0.5 pr-2.5 pl-1 text-xs font-medium duration-300 animate-in fade-in zoom-in-50"
+            style={{ background: `${reactionTints[level]}33`, boxShadow: `inset 0 0 0 1px ${reactionTints[level]}88` }}
+          >
+            <span className="text-xl leading-none">{reactions[level]}</span>
+            {level}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">{answer?.type === "refusal" ? "refused" : "waiting"}</span>
+        )}
       </div>
       <div className="grid grid-cols-4 gap-1">
         {interestLevels.map((name, i) => (
