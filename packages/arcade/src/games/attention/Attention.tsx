@@ -462,7 +462,7 @@ export function Attention({ arg, info }: { arg?: string; info: FrameInfo }) {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
         <div
           ref={pictureBox}
-          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-black lg:w-[min(52%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(52%,calc(100vh-11.5rem))] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:bg-black"
+          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-black lg:w-[min(52%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(52%,calc(100vh-11.5rem))] maximized:flex maximized:items-center maximized:justify-center maximized:rounded-none maximized:border-0 maximized:bg-black"
         >
           <canvas ref={mainCanvas} className="block" />
           <FullscreenButton target={pictureBox} />

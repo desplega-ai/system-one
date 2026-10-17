@@ -3,17 +3,39 @@ import { type RefObject, useEffect, useState } from "react";
 import { Button } from "@/web/components/ui/button";
 import { Tip } from "./Tip.tsx";
 
-/** Puts one element (the video, the arena) in full screen, without the rest of the page. */
+/**
+ * Puts one element (the video, the arena) in full screen, without the rest of the page. iPhone Safari has
+ * no full screen for elements, so there the element covers the window instead (`data-maximized`, styled in
+ * globals.css) and the page stops scrolling. Esc leaves both.
+ */
 export function FullscreenButton({ target }: { target: RefObject<HTMLElement | null> }) {
-  const [on, setOn] = useState(false);
+  const [native, setNative] = useState(false);
+  const [covering, setCovering] = useState(false);
   useEffect(() => {
-    const onChange = () => setOn(document.fullscreenElement !== null && document.fullscreenElement === target.current);
+    const onChange = () => setNative(document.fullscreenElement !== null && document.fullscreenElement === target.current);
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
+  useEffect(() => {
+    const el = target.current;
+    if (!covering || !el) return;
+    el.setAttribute("data-maximized", "");
+    document.documentElement.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setCovering(false);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      el.removeAttribute("data-maximized");
+      document.documentElement.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [covering]);
+  const on = native || covering;
   const toggle = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void target.current?.requestFullscreen();
+    if (document.fullscreenElement) return void document.exitFullscreen();
+    if (covering) return setCovering(false);
+    const el = target.current;
+    if (el && document.fullscreenEnabled && typeof el.requestFullscreen === "function") void el.requestFullscreen().catch(() => setCovering(true));
+    else setCovering(true);
   };
   return (
     <Tip text={on ? "Leave full screen (Esc)" : "Full screen: only this view"}>

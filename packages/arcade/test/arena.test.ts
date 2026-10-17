@@ -229,3 +229,13 @@ test("every preset uses registry models, 2 to 6 of them, and has a unique id", a
   }
   expect(new Set(presets.map((p) => p.id)).size).toBe(presets.length);
 });
+
+test("the presets mix every field, clock and policy", async () => {
+  const { presets } = await import("../src/games/arena/presets.ts");
+  const mixes = new Set(presets.map((p) => `${p.field} ${p.clock} ${p.policy}`));
+  for (const field of ["ring", "plane"]) {
+    for (const clock of ["lockstep", "realtime"]) {
+      for (const policy of ["sample", "top"]) expect({ mix: `${field} ${clock} ${policy}`, found: mixes.has(`${field} ${clock} ${policy}`) }).toMatchObject({ found: true });
+    }
+  }
+});

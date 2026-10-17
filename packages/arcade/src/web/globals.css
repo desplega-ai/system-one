@@ -6,6 +6,8 @@
 @import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:is(.dark *));
+/* An element in full screen: the browser's own, or the stand-in that FullscreenButton uses on an iPhone. */
+@custom-variant maximized (&:is(:fullscreen, [data-maximized]));
 
 @theme inline {
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
@@ -97,4 +99,17 @@
 /* Stage mode (F, or the Focus button) hides everything that is not the game. */
 html.stage [data-chrome] {
   display: none;
+}
+
+/* iPhone Safari cannot put an element in full screen. FullscreenButton marks the element instead, and this
+   does what the browser does for :fullscreen: the element covers the whole window, above the page. */
+[data-maximized] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 100;
+  margin: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh !important;
+  aspect-ratio: auto !important;
 }

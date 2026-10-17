@@ -127,16 +127,20 @@ Two clocks:
 
 Each field and clock has its own ranking (`arena-lockstep`, `plane-realtime`, ...). The Ranking tab filters by field, clock, policy, provider and model, and sorts by any column. If nobody fires for N turns in a row (default 10, "Draw after" in the setup), the match ends in a draw and nobody wins. The models know this rule and see the count. Draws and the share of "stay" moves show up in the rankings.
 
-Presets are named setups worth watching (or recording). Pick one in the setup, or open `#/arena/<id>`. They live in `packages/arcade/src/games/arena/presets.ts`. Models are not fully deterministic, so a preset repeats the setup and the seed, not always the match.
+Presets are named setups worth watching (or recording). Pick one in the setup, or open `#/arena/<id>`. They live in `packages/arcade/src/games/arena/presets.ts`, and together they cover both fields, both clocks and both policies (a test checks it). Models are not fully deterministic, so a preset repeats the setup and the seed, not always the match.
 
 | Preset | Setup | Seen so far |
 | --- | --- | --- |
-| `standoff` | Clef vs Jev, lockstep, top answers | Both stay put and never fire. Draw after 10 quiet turns. Jev's P(fire) sits near 50%, so in real-time it sometimes fires and wins. |
-| `trigger-happy` | GPT-6 Luna vs Clef vs Jev, real-time, top answers | Clef and Jev stay put all match. Luna fires from its first answer, but OpenAI's first answers are slow (up to 12 s), so Luna acts less often. |
-| `speed-duel` | Clef Flash vs Clef, real-time, sampling | Clef Flash answers in about 180 ms against 340 ms and acts about 1.8 times as often. |
-| `luna-hosts` | GPT-6 Luna via OpenAI, OpenRouter and AI Gateway, real-time, sampling | One match: OpenAI direct (230 ms) won, OpenRouter (300 ms) fell first. |
-| `mirror` | Jev vs Jev, lockstep, sampling | Same model, so only the dice decide. |
-| `free-for-all` | 6 different models, lockstep, sampling | |
+| 🤠 `standoff` | Ring. Clef vs Jev, lockstep, top answers | Both stay put and never fire. Draw after 10 quiet turns. Jev's P(fire) sits near 50%, so in real-time it sometimes fires and wins. |
+| ⚡ `speed-duel` | Ring. Clef Flash vs Clef, real-time, sampling | Clef Flash answers in about 180 ms against 340 ms and acts about 1.8 times as often. |
+| 🔫 `trigger-happy` | Ring. GPT-6 Luna vs Clef vs Jev, real-time, top answers | Clef and Jev stay put all match. Luna fires from its first answer, but OpenAI's first answers are slow (up to 12 s), so Luna acts less often. |
+| 🛰️ `luna-hosts` | Ring. GPT-6 Luna via OpenAI, OpenRouter and AI Gateway, real-time, sampling | One match: OpenAI direct (230 ms) won, OpenRouter (300 ms) fell first. |
+| 🎉 `free-for-all` | Ring. 6 different models, lockstep, sampling | |
+| 🪞 `mirror` | Plane. Jev vs Jev, lockstep, sampling | Same model, so only the dice decide. |
+| 🎯 `sniper-duel` | Plane. Jev vs GPT-6 Luna, lockstep, top answers | |
+| 🏐 `dodgeball` | Plane. Clef Flash, Jev, GPT-6 Luna and Clef-Omni, real-time, sampling | |
+| 🐝 `jev-swarm` | Plane. Jev twice, Jev via OpenRouter, Jev 1.14 via AI Gateway, real-time, sampling | |
+| 🌪️ `plane-brawl` | Plane. 6 models, real-time, top answers | |
 
 ### Attention
 

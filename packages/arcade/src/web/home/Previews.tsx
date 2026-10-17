@@ -1,15 +1,14 @@
 // Home page previews: the real game renderers, played by fake answers. They make no API calls, so each
 // preview carries a "simulated" badge: the logos show who could play, not what they did.
-import type { Usage } from "@system-one/ai";
-import { cn } from "cn";
+import type { Answer, Questions, Usage } from "@system-one/ai";
 import { useEffect, useRef } from "react";
-import { createMatch, createRng, isOver, type Match, playTick, type Turn as ArenaTurn } from "../../games/arena/engine.ts";
-import { drawArena, emptyShown, glide as glideArena } from "../../games/arena/render.ts";
+import { createRng } from "../../games/arena/engine.ts";
+import { type Field, type FieldMatch, fields } from "../../games/arena/fields.ts";
 import { applyTurn, createGame, type Game, interestLevels, type Turn as AttentionTurn } from "../../games/attention/engine.ts";
 import market from "../../games/attention/images/market.jpg";
 import { drawPicture, drawZoom, glide as glideAttention, type Shown } from "../../games/attention/render.ts";
 import { cells } from "../lib/media.ts";
-import { useElementWidth } from "../lib/hooks.ts";
+import { useElementWidth, useSquareSide } from "../lib/hooks.ts";
 import cloudflareLogo from "../logos/cloudflare.svg";
 import openaiLogo from "../logos/openai.svg";
 import typesafeLogo from "../logos/typesafe.png";
@@ -56,61 +55,81 @@ const players = [
   { name: "GPT-6 Luna", logo: openaiLogo },
   { name: "Clef", logo: cloudflareLogo },
 ];
-const ids = ["red", "blue", "green", "yellow"];
 
-/** Four agents on the ring at real-time speed: a turn every 250 ms, and a new match 1.5 s after one ends.
- * The box is 16:10 with the ring as tall as the box, or a square (`square`, for the share image) as wide as the ring. */
-export function ArenaPreview({ square = false }: { square?: boolean }) {
-  const [box, width] = useElementWidth<HTMLDivElement>();
+/** A made-up answer to each question: one favorite option, and a 20% to 70% chance to fire. The arena asks
+ * only choices and yes or no questions. */
+function fakeAnswers(questions: Questions, rng: () => number): Record<string, Answer> {
+  return Object.fromEntries(
+    Object.entries(questions).map(([id, question]) => [
+      id,
+      question.type === "choice" ? { type: "choice", ...guess(Object.keys(question.options), rng) } : { type: "boolean", probability: 0.2 + rng() * 0.5 },
+    ]),
+  );
+}
+
+const DRAW_MIN_PX = 320;
+
+/** Four agents on one field at real-time speed: a turn every `tickMs`, and a new match 1.5 s after one ends. */
+function FieldPreview({ field, seed, tickMs }: { field: Field; seed: number; tickMs: number }) {
+  const [box, side] = useSquareSide<HTMLDivElement>();
   const canvas = useRef<HTMLCanvasElement>(null);
-  const state = useRef({ match: undefined as Match | undefined, shown: emptyShown(), next: 0, rng: createRng(7) });
+  const state = useRef({ match: undefined as FieldMatch | undefined, view: field.view(), next: 0, rng: createRng(seed) });
 
   useAnimation((now) => {
     const s = state.current;
-    if (!s.match) s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
+    s.match ??= field.createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
     if (now >= s.next) {
-      if (isOver(s.match)) {
-        s.match = createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
-        s.shown = emptyShown();
+      if (field.isOver(s.match)) {
+        s.match = field.createMatch(["a", "b", "c", "d"], { maxTicks: 120 });
+        s.view = field.view();
       } else {
-        const standing = s.match.agents.filter((a) => a.hp > 0);
-        const turns: Record<string, ArenaTurn> = {};
-        for (const agent of standing) {
-          const others = standing.filter((a) => a.id !== agent.id).map((a) => a.id);
-          turns[agent.id] = {
-            answers: {
-              move: { type: "choice", ...guess(["clockwise", "stay", "counterclockwise"] as const, s.rng) },
-              target: { type: "choice", ...guess([...others, "nobody"], s.rng) },
-              fire: { type: "boolean", probability: 0.2 + s.rng() * 0.5 },
-            },
-            usage,
-            latencyMs: 0,
-          };
-        }
-        s.match = playTick(s.match, turns, "sample", s.rng);
+        const match = s.match;
+        const turns = Object.fromEntries(field.alive(match).map((agent) => [agent.id, { answers: fakeAnswers(field.questions(match, agent), s.rng), usage, latencyMs: 0 }]));
+        s.match = field.playTick(match, turns, "sample", s.rng);
       }
-      s.next = now + (isOver(s.match) ? 1500 : 250);
+      s.next = now + (field.isOver(s.match) ? 1500 : tickMs);
     }
-    const size = square ? width : Math.round((width * 10) / 16);
-    if (!canvas.current || size === 0) return;
-    s.shown = glideArena(s.shown, s.match, now);
-    const labels = Object.fromEntries(ids.map((id, i) => [id, players[i]!.name]));
-    const logos = Object.fromEntries(ids.map((id, i) => [id, logoImage(players[i]!.logo)]));
-    drawArena(canvas.current, s.match, labels, s.shown, now, size, logos);
+    if (!canvas.current || side === 0) return;
+    const labels = Object.fromEntries(s.match.agents.map((a, i) => [a.id, players[i]!.name]));
+    const logos = Object.fromEntries(s.match.agents.map((a, i) => [a.id, logoImage(players[i]!.logo)]));
+    // The renderers size text and dots in pixels, so a small field draws at DRAW_MIN_PX and shrinks as a
+    // whole, like a screenshot of the game.
+    s.view = field.draw(canvas.current, s.match, s.view, labels, logos, now, Math.max(side, DRAW_MIN_PX));
+    canvas.current.style.width = canvas.current.style.height = `${side}px`;
   });
 
   return (
-    <div
-      ref={box}
-      className={cn(
-        "relative flex items-center justify-center",
-        // The square fades into the page around it. The 16:10 box is a dark panel inside its card.
-        square
-          ? "aspect-square bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),transparent_70%)]"
-          : "aspect-[16/10] bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)]",
-      )}
-    >
+    <div ref={box} className="flex size-full items-center justify-center">
       <canvas ref={canvas} />
+    </div>
+  );
+}
+
+/**
+ * The arena on the home page: the ring on the left and the plane on the right, split by a line. `square`
+ * shows only the ring, as wide as the box (for the share image).
+ */
+export function ArenaPreview({ square = false }: { square?: boolean }) {
+  if (square) {
+    return (
+      <div className="relative aspect-square bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),transparent_70%)]">
+        <FieldPreview field={fields.ring} seed={7} tickMs={250} />
+        <Simulated />
+      </div>
+    );
+  }
+  return (
+    <div className="relative grid aspect-[16/10] grid-cols-2 bg-[radial-gradient(circle_at_center,oklch(0.17_0.01_265),oklch(0.12_0.008_265)_75%)]">
+      {[
+        { field: fields.ring, seed: 7, tickMs: 250 },
+        { field: fields.plane, seed: 11, tickMs: fields.plane.realtimeTickMs },
+      ].map((side) => (
+        <div key={side.field.id} className="relative min-w-0 px-2 pt-7 pb-3">
+          <FieldPreview {...side} />
+          <span className="caps absolute top-3 left-1/2 -translate-x-1/2 text-[9px] text-muted-foreground">{side.field.name}</span>
+        </div>
+      ))}
+      <div className="pointer-events-none absolute inset-y-4 left-1/2 w-px bg-gradient-to-b from-transparent via-white/15 to-transparent" />
       <Simulated />
     </div>
   );

@@ -24,7 +24,7 @@ import { SetupRow } from "../../web/ui/SetupRow.tsx";
 import { Tip } from "../../web/ui/Tip.tsx";
 import { createRng, MAX_TICKS, type Policy, type Rng, START_HP, STALEMATE_TURNS } from "./engine.ts";
 import { type Field, type FieldAgent, type FieldId, type FieldMatch, type FieldTurn, fields } from "./fields.ts";
-import { type Clock, presets } from "./presets.ts";
+import { type Clock, type Preset, presets } from "./presets.ts";
 
 type Status = "setup" | "running" | "paused" | "over";
 /** One match. Stop or a new match aborts its open calls, and late answers are dropped. */
@@ -81,6 +81,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
   useEffect(() => {
     if (!preset || models.length === 0 || !hasModels(preset.models) || statusRef.current === "running") return;
     setSlots(preset.models);
+    setFieldId(preset.field);
     setClock(preset.clock);
     setPolicy(preset.policy);
     setSeed(preset.seed);
@@ -408,9 +409,9 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
               onValueChange={(id) => (window.location.hash = id ? `#/arena/${id}` : "#/arena")}
             >
               {presets.map((p) => (
-                <Tip key={p.id} text={models.length > 0 && !hasModels(p.models) ? "Needs a model without a key here" : p.models.map(label).join(" vs ")}>
+                <Tip key={p.id} text={models.length > 0 && !hasModels(p.models) ? "Needs a model without a key here" : presetSummary(p, label)}>
                   <ToggleGroupItem value={p.id} className={onChip} disabled={models.length > 0 && !hasModels(p.models)}>
-                    {p.name}
+                    <span aria-hidden="true">{p.emoji}</span> {p.name}
                   </ToggleGroupItem>
                 </Tip>
               ))}
@@ -490,7 +491,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
         <div
           ref={arenaBox}
-          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)] lg:w-[min(48%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(48%,calc(100vh-11.5rem))] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0"
+          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)] lg:w-[min(48%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(48%,calc(100vh-11.5rem))] maximized:flex maximized:items-center maximized:justify-center maximized:rounded-none maximized:border-0"
         >
           <canvas ref={canvas} className="block" />
           <FullscreenButton target={arenaBox} />
@@ -513,6 +514,13 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
       </div>
     </GameFrame>
   );
+}
+
+/** "Ring, real-time, top answer: Clef vs Jev", for the preset tooltips. */
+function presetSummary(preset: Preset, label: (key: string) => string): string {
+  const clock = preset.clock === "realtime" ? "real-time" : "lockstep";
+  const policy = preset.policy === "top" ? "top answer" : "sample";
+  return `${fields[preset.field].name}, ${clock}, ${policy}: ${preset.models.map((key) => splitLabel(label(key)).name).join(" vs ")}`;
 }
 
 /** How the match ended, and the final standings. */
