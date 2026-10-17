@@ -24,6 +24,8 @@ export function sourceSize(src: Source): { width: number; height: number } {
 }
 
 const isWebcam = (src: Source): src is HTMLVideoElement => src instanceof HTMLVideoElement && src.srcObject !== null;
+/** A front camera or a laptop webcam (which reports no facing) shows mirrored. A phone's back camera does not. */
+const isMirrored = (src: Source) => isWebcam(src) && (src.srcObject as MediaStream).getVideoTracks()[0]?.getSettings().facingMode !== "environment";
 
 /**
  * The square the game plays on, in source pixels. The webcam uses its center square (it fills the frame,
@@ -38,16 +40,17 @@ export function squareOf(src: Source): { x: number; y: number; side: number } {
 
 /**
  * Draws a view of the source as a `side` px square at (dx, dy).
- * The webcam is mirrored, like a mirror: the screen, the squares and the models all see the same flipped
+ * The front camera is mirrored, like a mirror: the screen, the squares and the models all see the same flipped
  * picture, so a cell on screen is the cell the model names. Text on camera reads backwards for the models.
+ * A phone's back camera is not mirrored.
  */
 export function drawView(ctx: CanvasRenderingContext2D, src: Source, view: View, dx: number, dy: number, side: number) {
   const square = squareOf(src);
   const size = view.size * square.side;
   const sy = square.y + view.y * square.side;
-  // Only the webcam (a live stream) is mirrored. A picture or a video file plays as it is, with black bars
-  // where the square reaches outside it. The source rectangle is clipped to the source by hand.
-  if (!isWebcam(src)) {
+  // Only the front camera is mirrored. A back camera, a picture or a video file plays as it is. A file gets
+  // black bars where the square reaches outside it. The source rectangle is clipped to the source by hand.
+  if (!isMirrored(src)) {
     const { width, height } = sourceSize(src);
     const sx = square.x + view.x * square.side;
     const scale = side / size;

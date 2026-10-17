@@ -1,4 +1,5 @@
 import { cn } from "cn";
+import { ChartColumn } from "lucide-react";
 import type { ComponentType } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/tooltip";
 import type { BudgetInfo } from "../lib/api.ts";
@@ -7,79 +8,116 @@ import { Logo } from "./Logo.tsx";
 
 export type NavLink = { path: string; title: string; icon: ComponentType<{ className?: string }> };
 
-const dollars = (n: number) => (n > 0 && n < 0.01 ? "<$0.01" : `$${n.toFixed(2)}`);
+/** Short money for the header: "$0.03", "$15", "<$0.01". */
+const dollars = (n: number) => (n > 0 && n < 0.01 ? "<$0.01" : Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
 // Measured costs: a 30 s webcam session with 3 models, and one arena match with 4.
 const webcamUsd = 0.02;
 const matchUsd = 0.004;
+
+const linkClass = (active: boolean) =>
+  cn(
+    "inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:px-3",
+    active && "bg-white/[0.06] text-foreground",
+  );
 
 export function TopBar({ links, active }: { links: NavLink[]; active?: string }) {
   const budget = useBudget();
   return (
     <header data-chrome className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-[1360px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-[1360px] items-center gap-2 px-4 sm:gap-6 sm:px-6">
         <a href="#/" className="flex shrink-0 items-center gap-2.5 font-semibold tracking-tight" aria-label="System One Arcade, home">
           <Logo className="size-7" />
           <span className="hidden md:inline">System One Arcade</span>
         </a>
         <nav className="flex items-center gap-1">
           {links.map((link) => (
-            <a
-              key={link.path}
-              href={`#/${link.path}`}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:px-3",
-                active === link.path && "bg-white/[0.06] text-foreground",
-              )}
-            >
+            <a key={link.path} href={`#/${link.path}`} className={linkClass(active === link.path)} aria-label={link.title}>
               <link.icon className="size-4" />
-              {link.title}
+              <span className="hidden sm:inline">{link.title}</span>
             </a>
           ))}
         </nav>
-        {budget && <BudgetPill budget={budget} />}
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <a href="#/stats" className={linkClass(active === "stats")} aria-label="Stats">
+            <ChartColumn className="size-4" />
+            <span className="hidden sm:inline">Stats</span>
+          </a>
+          {budget && <BudgetMeter budget={budget} />}
+        </div>
       </div>
     </header>
   );
 }
 
-function BudgetPill({ budget }: { budget: BudgetInfo }) {
-  // A public site shows each visitor its own share. A private one shows the whole day's spend.
-  const spent = budget.you ? budget.you.spent : budget.spent.total;
-  const cap = budget.you ? budget.you.cap : budget.dailyUsd;
-  const share = cap ? Math.min(1, spent / cap) : 0;
+/** Two gauges in one pill: this visitor's share and the whole arcade's day. A private server has only the day. */
+function BudgetMeter({ budget }: { budget: BudgetInfo }) {
+  const site = budget.dailyUsd !== undefined ? { spent: budget.spent.total, cap: budget.dailyUsd } : undefined;
+  const you = budget.you;
+  if (!site && !you) return null;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className="ml-auto flex shrink-0 items-center gap-3 rounded-full border px-3 py-1 font-mono text-xs tabular-nums text-muted-foreground">
-          <span>
-            <span className="hidden sm:inline">{budget.you ? "your share " : "today "}</span>
-            {dollars(spent)}
-            {cap !== undefined && <span className="opacity-60"> / {dollars(cap)}</span>}
-          </span>
-          {cap !== undefined && (
-            <span className="hidden h-1 w-14 overflow-hidden rounded-full bg-white/10 sm:block">
-              <span className="block h-full rounded-full bg-foreground/70" style={{ width: `${share * 100}%` }} />
-            </span>
-          )}
+        <div tabIndex={0} className="flex shrink-0 items-center rounded-full border bg-white/[0.02] font-mono text-xs tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+          {you && <Gauge label="You" {...you} />}
+          {you && site && <span className="hidden h-4 w-px bg-border sm:block" />}
+          {site && <Gauge label={you ? "Arcade" : "Today"} {...site} className={you ? "hidden sm:flex" : undefined} />}
         </div>
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        {budget.you ? (
-          <>
-            <p>
-              Model calls cost money, so each visitor gets {dollars(budget.you.cap)} a day. That is about {Math.floor(budget.you.cap / webcamUsd)} webcam
-              sessions with 3 models, or {Math.floor(budget.you.cap / matchUsd)} matches.
-            </p>
-            {budget.dailyUsd !== undefined && (
-              <p className="mt-1 opacity-70">
-                The whole arcade today: {dollars(budget.spent.total)} of {dollars(budget.dailyUsd)}.
-              </p>
-            )}
-          </>
-        ) : (
-          "What the model calls cost today. The server refuses calls above the daily cap."
+      <TooltipContent className="max-w-72 space-y-2 p-3">
+        {you && (
+          <p>
+            <span className="font-medium">Your share:</span> {dollars(you.spent)} of {dollars(you.cap)} today. That is about{" "}
+            {Math.floor(you.cap / webcamUsd)} webcam sessions with 3 models, or {Math.floor(you.cap / matchUsd)} matches.
+          </p>
         )}
+        {site && (
+          <p>
+            <span className="font-medium">{you ? "The whole arcade" : "Today"}:</span> {dollars(site.spent)} of {dollars(site.cap)}. Above the cap, the games stop
+            for everyone.
+          </p>
+        )}
+        <p className="opacity-70">Both reset at 00:00 UTC, in {untilMidnightUtc()}.</p>
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/** A ring that fills as the money goes, a label, and "spent / cap". It turns amber at 75% and red at the cap. */
+function Gauge({ label, spent, cap, className }: { label: string; spent: number; cap: number; className?: string }) {
+  const share = cap > 0 ? Math.min(1, spent / cap) : 1;
+  const tone = share >= 1 ? "text-destructive" : share >= 0.75 ? "text-amber-400" : "text-foreground";
+  const r = 5.5;
+  const length = 2 * Math.PI * r;
+  return (
+    <span className={cn("flex items-center gap-2 py-1 pr-3 pl-2", className)}>
+      <svg viewBox="0 0 16 16" className={cn("size-4 -rotate-90", tone)} aria-hidden="true">
+        <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2.5" />
+        {share > 0 && (
+          <circle
+            cx="8"
+            cy="8"
+            r={r}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeDasharray={`${Math.max(share * length, 0.5)} ${length}`}
+            className="transition-[stroke-dasharray] duration-700"
+          />
+        )}
+      </svg>
+      <span className="caps hidden text-[10px] text-muted-foreground lg:inline">{label}</span>
+      <span>
+        <span className={tone}>{dollars(spent)}</span>
+        <span className="text-muted-foreground"> / {dollars(cap)}</span>
+      </span>
+    </span>
+  );
+}
+
+/** "5 h 12 min" until the next 00:00 UTC. */
+function untilMidnightUtc(now = new Date()): string {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const minutes = Math.ceil((next - now.getTime()) / 60_000);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
 }

@@ -1,5 +1,5 @@
 import { type Answer, decisionStream } from "@system-one/ai";
-import { Camera, CameraOff, Film, ImageIcon, Upload } from "lucide-react";
+import { Camera, CameraOff, Film, ImageIcon, LoaderCircle, SwitchCamera, Upload } from "lucide-react";
 import { cn } from "cn";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/web/components/ui/alert";
@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/too
 import { type FrameInfo, GameFrame } from "../../web/components/GameFrame.tsx";
 import { ApiError, api, type ModelInfo } from "../../web/lib/api.ts";
 import { refreshBudget } from "../../web/lib/budget.ts";
-import { useSquareSide, useWebcam } from "../../web/lib/hooks.ts";
+import { cameraAllowed, useSquareSide, useWebcam } from "../../web/lib/hooks.ts";
 import { cropImage, fullView, gridImage, overviewImage, type Source, squareOf } from "../../web/lib/media.ts";
 import { Board } from "../../web/ui/Board.tsx";
 import { FullscreenButton } from "../../web/ui/FullscreenButton.tsx";
@@ -22,6 +22,7 @@ import { ProbabilityBars } from "../../web/ui/ProbabilityBars.tsx";
 import { FilterChips, useModelFilters } from "../../web/ui/RankingFilters.tsx";
 import { ResultCard } from "../../web/ui/ResultCard.tsx";
 import { SetupRow } from "../../web/ui/SetupRow.tsx";
+import { Tip } from "../../web/ui/Tip.tsx";
 import {
   createGame,
   currentView,
@@ -145,13 +146,17 @@ export function Attention({ arg, info }: { arg?: string; info: FrameInfo }) {
     }, (e) => setNotice(message(e)));
   }, []);
 
-  // Open the camera for a preview, or load the picture and turn the camera off. An uploaded video plays
-  // in its own hidden <video>.
+  // Open the camera for a preview only when the browser already allows it: the permission prompt waits
+  // for a click on "Turn on the camera" (or Start). Else load the picture and turn the camera off. An
+  // uploaded video plays in its own <video>.
   useEffect(() => {
     setPicture(undefined);
     if (source === "webcam") {
-      void webcam.start();
-      return;
+      let cancelled = false;
+      void cameraAllowed().then((allowed) => allowed && !cancelled && webcam.start());
+      return () => {
+        cancelled = true;
+      };
     }
     webcam.stop();
     if (uploadedVideo) return;
@@ -466,18 +471,19 @@ export function Attention({ arg, info }: { arg?: string; info: FrameInfo }) {
               <span className="size-2 animate-pulse rounded-full bg-live" /> LIVE <span className="text-muted-foreground">{remaining}s</span>
             </div>
           )}
-          {source === "webcam" && webcam.status !== "on" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-              {webcam.status === "error" ? <CameraOff className="size-6 text-muted-foreground" /> : <Camera className="size-6 text-muted-foreground" />}
-              <p className="text-sm text-muted-foreground">
-                {webcam.status === "starting" ? "Opening the camera." : webcam.status === "error" ? `The camera did not open: ${webcam.error}` : "The camera is off."}
-              </p>
-              {webcam.status !== "starting" && (
-                <Button size="sm" variant="secondary" onClick={() => void webcam.start()}>
-                  <Camera /> Turn on the camera
-                </Button>
-              )}
-            </div>
+          {source === "webcam" && webcam.status !== "on" && <CameraGate status={webcam.status} error={webcam.error} onStart={() => void webcam.start()} />}
+          {source === "webcam" && webcam.status === "on" && webcam.canFlip && (
+            <Tip text="Switch between the front and the back camera">
+              <Button
+                variant="secondary"
+                size="icon-sm"
+                aria-label="Switch camera"
+                onClick={() => void webcam.flip()}
+                className="absolute top-3 right-13 z-10 bg-black/50 opacity-60 backdrop-blur transition-opacity hover:opacity-100"
+              >
+                <SwitchCamera />
+              </Button>
+            </Tip>
           )}
           <video ref={webcam.videoRef} muted playsInline className="pointer-events-none absolute size-px opacity-0" />
           {uploadedVideo && (
@@ -551,6 +557,36 @@ function AttentionResult({ game, label, elapsedMs }: { game: Game; label: (key: 
         };
       })}
     />
+  );
+}
+
+/** Fills the empty picture square until the camera plays: a button that asks for the camera, a wait while
+ * the browser asks, or what went wrong. */
+function CameraGate({ status, error, onStart }: { status: "off" | "starting" | "error"; error?: string; onStart: () => void }) {
+  const failed = status === "error";
+  const Icon = failed ? CameraOff : Camera;
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_center,oklch(0.2_0.01_265),oklch(0.11_0.008_265)_75%)] p-6 text-center">
+      <div className="bg-grid pointer-events-none absolute inset-0 [mask-image:radial-gradient(circle_at_center,black_10%,transparent_60%)]" />
+      <span className={cn("relative grid size-14 place-items-center rounded-full border bg-white/[0.04]", status === "starting" && "animate-pulse")}>
+        {status === "starting" ? <LoaderCircle className="size-6 animate-spin text-muted-foreground" /> : <Icon className={cn("size-6", failed ? "text-destructive" : "text-foreground")} />}
+      </span>
+      <div className="relative max-w-72 space-y-1.5">
+        <p className="font-medium">{status === "starting" ? "Waiting for the camera" : failed ? "The camera did not open" : "Show the models your world"}</p>
+        <p className="text-sm text-muted-foreground">
+          {status === "starting"
+            ? "Allow the camera in the browser's prompt."
+            : failed
+              ? `${error ?? "Unknown error"}. Check the camera permission next to the address bar, then try again.`
+              : "The judges watch your camera and zoom in on what catches their eye. Only the models see the frames. The arcade keeps no images."}
+        </p>
+      </div>
+      {status !== "starting" && (
+        <Button className="relative" onClick={onStart}>
+          <Camera /> {failed ? "Try again" : "Turn on the camera"}
+        </Button>
+      )}
+    </div>
   );
 }
 

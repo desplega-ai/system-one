@@ -114,10 +114,18 @@ export function GameFrame({ info, controls, stats, players, subtitle, progress, 
           <div className="ml-auto flex items-center gap-2">
             <TabsList data-chrome>
               <TabsTrigger value="game" className="px-3">
-                Game <Kbd>G</Kbd>
+                Game
+                {/* Phones have no keys to show. */}
+                <span className="hidden sm:inline">
+                  <Kbd>G</Kbd>
+                </span>
               </TabsTrigger>
               <TabsTrigger value="ranking" className="px-3">
-                Ranking <Kbd>R</Kbd>
+                Ranking
+                {/* Phones have no keys to show. */}
+                <span className="hidden sm:inline">
+                  <Kbd>R</Kbd>
+                </span>
               </TabsTrigger>
             </TabsList>
             <Tooltip>

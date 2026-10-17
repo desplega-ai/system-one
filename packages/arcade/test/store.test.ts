@@ -59,6 +59,47 @@ describe("store", () => {
     expect(() => store.ranking("arena-lockstep", { "policy') OR 1=1 --": "x" })).toThrow();
   });
 
+  test("stats() sums the call log per model, game, hour and error, with latency percentiles", () => {
+    const store = openStore(":memory:");
+    const arena = store.createRun("arena-lockstep", {}, "v1");
+    const attention = store.createRun("attention-live", {}, "v2");
+    const now = new Date("2026-10-17T12:30:00Z");
+    const call = (runId: string, model: string, at: string, latencyMs: number, extra: { errorCode?: string; visitor?: string } = {}) =>
+      store.recordCall({ runId, kind: "decide", provider: model.split(":")[0]!, model, startedAt: new Date(at), latencyMs, usage: usage(0.001), input: null, output: null, ...extra });
+    for (const ms of [100, 200, 300, 400]) call(arena, "openai:luna", "2026-10-17T09:10:00Z", ms, { visitor: "v1" });
+    call(arena, "openai:luna", "2026-10-17T09:20:00Z", 5000, { errorCode: "http", visitor: "v1" });
+    call(attention, "cloudflare:clef", "2026-10-17T11:00:00Z", 250, { visitor: "v2" });
+    call(attention, "cloudflare:clef", "2026-10-17T11:01:00Z", 900, { errorCode: "aborted", visitor: "v2" });
+    // Yesterday is outside "today", inside "7d".
+    call(arena, "openai:luna", "2026-10-16T20:00:00Z", 100, { visitor: "v1" });
+
+    const today = store.stats("today", now);
+    expect(today.since).toBe("2026-10-17T00:00:00.000Z");
+    expect(today.series).toHaveLength(24);
+    expect(today.series[9]).toEqual({ at: "2026-10-17T09:00:00.000Z", calls: 5, failed: 1, usd: expect.closeTo(0.005, 10) });
+    expect(today.series[11]).toMatchObject({ calls: 2, failed: 0 });
+    expect(today.totals).toMatchObject({ calls: 7, failed: 1, aborted: 1, inputTokens: 700, visitors: 2, runs: 2 });
+    // Latency counts successful calls only: 100, 200, 250, 300, 400.
+    expect(today.totals).toMatchObject({ p50Ms: 250, p95Ms: 400 });
+    expect(today.models.map((m) => [m.model, m.calls, m.failed, m.aborted, m.p50Ms])).toEqual([
+      ["openai:luna", 5, 1, 0, 200],
+      ["cloudflare:clef", 2, 0, 1, 250],
+    ]);
+    expect(today.games).toEqual([
+      { game: "arena-lockstep", runs: 1, calls: 5, usd: expect.closeTo(0.005, 10) },
+      { game: "attention-live", runs: 1, calls: 2, usd: expect.closeTo(0.002, 10) },
+    ]);
+    expect(today.errors).toEqual([
+      { code: "aborted", calls: 1 },
+      { code: "http", calls: 1 },
+    ]);
+
+    const week = store.stats("7d", now);
+    expect(week.series.map((b) => b.at.slice(0, 10))).toEqual(["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"]);
+    expect(week.series.map((b) => b.calls)).toEqual([0, 0, 0, 0, 0, 1, 7]);
+    expect(store.stats("30d", now).series).toHaveLength(30);
+  });
+
   test("redact() keeps text and replaces media with a hash and a size", () => {
     const redacted = redact({ state: ["Frames:", { $image: "data:image/png;base64,AAAA" }, { hp: 3 }], questions: {} });
     expect(redacted.state).toEqual(["Frames:", { $image: { sha256: expect.any(String), bytes: 3 } }, { hp: 3 }]);

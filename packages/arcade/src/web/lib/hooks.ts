@@ -30,13 +30,29 @@ type DeviceStatus = "off" | "starting" | "on" | "error";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+type Facing = "user" | "environment";
+
+/** True when the browser already allows the camera, so opening it shows no prompt. False when unknown
+ * (Firefox cannot query the camera permission). */
+export async function cameraAllowed(): Promise<boolean> {
+  try {
+    return (await navigator.permissions.query({ name: "camera" as PermissionName })).state === "granted";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The webcam in a <video> element. Games crop the live video when they build a call.
  * It asks for 1280x720, because the browser default (640x480) leaves little to zoom into.
+ * On a phone, `flip()` switches between the front and the back camera.
  */
 export function useWebcam() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const media = useRef<MediaStream | null>(null);
+  const facing = useRef<Facing>("user");
+  /** A phone camera reports which way it faces, and a phone has 2 or more cameras. A laptop webcam reports nothing. */
+  const [canFlip, setCanFlip] = useState(false);
   /** Each start and stop gets a number. A start that is no longer the newest gives up quietly. */
   const attempt = useRef(0);
   const [status, setStatus] = useState<DeviceStatus>("off");
@@ -60,7 +76,10 @@ export function useWebcam() {
     setError(undefined);
     let stream: MediaStream | undefined;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: { ideal: facing.current } },
+        audio: false,
+      });
       if (mine !== attempt.current) {
         stream.getTracks().forEach((t) => t.stop());
         return false;
@@ -73,6 +92,11 @@ export function useWebcam() {
       await video.play();
       if (mine !== attempt.current) return false;
       setStatus("on");
+      const reportsFacing = stream.getVideoTracks()[0]?.getSettings().facingMode !== undefined;
+      // The camera already plays: a failed device list only hides the flip button.
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+      const cameras = devices.filter((d) => d.kind === "videoinput").length;
+      setCanFlip(reportsFacing && cameras >= 2);
       return true;
     } catch (e) {
       if (mine !== attempt.current) {
@@ -86,8 +110,15 @@ export function useWebcam() {
     }
   }, [stop]);
 
+  /** Opens the other camera. A phone opens one camera at a time, so the old stream stops first. */
+  const flip = useCallback(async () => {
+    facing.current = facing.current === "user" ? "environment" : "user";
+    media.current?.getTracks().forEach((t) => t.stop());
+    return start();
+  }, [start]);
+
   useEffect(() => stop, [stop]);
-  return { videoRef, status, error, start, stop };
+  return { videoRef, status, error, start, stop, flip, canFlip };
 }
 
 // Runs in the audio thread. It groups the 128-sample blocks into frames of FRAME_MS and posts them.

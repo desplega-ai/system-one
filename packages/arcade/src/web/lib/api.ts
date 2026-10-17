@@ -16,6 +16,28 @@ export type Transcription = { text: string; language: string | undefined; usage:
 export type Generation = { text: string; usage: Usage; latencyMs: number };
 export type Score = { model: string; metric: string; value: number };
 export type RankingRow = { model: string; metric: string; rows: number; mean: number; sum: number };
+export type StatsRange = "today" | "7d" | "30d";
+/** "aborted" calls were stopped by the page, so they are not failures. Latency is over successful calls. */
+export type CallStats = {
+  calls: number;
+  failed: number;
+  aborted: number;
+  usd: number;
+  inputTokens: number;
+  outputTokens: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+};
+export type Stats = {
+  range: StatsRange;
+  since: string;
+  /** One bucket per UTC hour for today, else one per UTC day. */
+  series: { at: string; calls: number; failed: number; usd: number }[];
+  totals: CallStats & { visitors: number; runs: number };
+  models: (CallStats & { model: string; provider: string })[];
+  games: { game: string; runs: number; calls: number; usd: number }[];
+  errors: { code: string; calls: number }[];
+};
 export type BudgetInfo = {
   dailyUsd?: number;
   providers: Record<string, number>;
@@ -80,4 +102,6 @@ export const api = {
     ),
 
   budget: () => request<BudgetInfo>("/api/budget"),
+
+  stats: (range: StatsRange) => request<Stats>(`/api/stats?range=${range}`),
 };

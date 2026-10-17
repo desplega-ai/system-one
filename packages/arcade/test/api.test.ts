@@ -220,6 +220,20 @@ describe("/api/generate", () => {
   });
 });
 
+test("/api/stats sums the call log, keeps visitor data out, and checks the range", async () => {
+  const { post, get, runId } = setup();
+  await post("/api/decide", { runId, model: "fake:ok", call });
+  const res = await get("/api/stats", "?range=7d");
+  expect(res.status).toBe(200);
+  const stats = await res.json();
+  expect(stats).toMatchObject({ range: "7d", totals: { calls: 1, visitors: 1, runs: 1 }, models: [{ model: "fake:ok", calls: 1 }] });
+  expect(stats.series).toHaveLength(7);
+  expect(JSON.stringify(stats)).not.toMatch(/visitor"|ip_hash|ipHash/);
+  // The browser names the runs, so names outside the site's games show as "other".
+  expect(stats.games).toEqual([{ game: "other", runs: 1, calls: 1, usd: expect.closeTo(0.00003, 10) }]);
+  expect((await get("/api/stats", "?range=1y")).status).toBe(400);
+});
+
 test("/api/budget shows the caps and today's spend", async () => {
   const { get } = setup();
   expect(await (await get("/api/budget")).json()).toEqual({ dailyUsd: 1, providers: {}, spent: { total: 0, byProvider: {} } });

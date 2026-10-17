@@ -8,6 +8,7 @@ import type { FrameInfo } from "./components/GameFrame.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Home } from "./home/Home.tsx";
 import { ShareCard } from "./home/ShareCard.tsx";
+import { Stats } from "./stats/Stats.tsx";
 import { StageContext } from "./lib/stage.ts";
 
 /** `arg` is the rest of the route: "standoff" for #/arena/standoff. */
@@ -96,16 +97,22 @@ export function App() {
   const game = [...games, ...hidden].find((g) => g.path === path);
   const [stage, toggleStage] = useStage(game !== undefined);
   useEffect(() => {
-    document.title = game ? `${game.title} · System One Arcade` : "System One Arcade";
-  }, [game]);
+    document.title = game ? `${game.title} · System One Arcade` : path === "stats" ? "Stats · System One Arcade" : "System One Arcade";
+  }, [game, path]);
   // #/share is the link preview image, without the site around it.
   if (path === "share") return <ShareCard />;
   return (
     <TooltipProvider delayDuration={200}>
       <StageContext value={{ stage, toggle: toggleStage }}>
-        <TopBar links={games} active={game?.path} />
+        <TopBar links={games} active={path} />
         <main className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
-          {game ? <game.component key={game.path} arg={rest.join("/") || undefined} info={game} /> : <Home games={games} />}
+          {game ? (
+            <game.component key={game.path} arg={rest.join("/") || undefined} info={game} />
+          ) : path === "stats" ? (
+            <Stats arg={rest[0]} />
+          ) : (
+            <Home games={games} />
+          )}
         </main>
       </StageContext>
     </TooltipProvider>

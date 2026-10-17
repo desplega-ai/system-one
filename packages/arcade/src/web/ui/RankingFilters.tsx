@@ -7,7 +7,7 @@ import { hostByKey, hosts } from "./brands.ts";
 import { splitLabel } from "./ModelName.tsx";
 
 // The selected chip keys on aria-checked, like the setup chips.
-const onChip = "h-7 px-2.5 text-xs aria-checked:border-primary aria-checked:bg-primary aria-checked:text-primary-foreground";
+export const onChip = "h-7 px-2.5 text-xs aria-checked:border-primary aria-checked:bg-primary aria-checked:text-primary-foreground";
 
 /** Radix treats an empty value as "nothing selected", so "" (all) is "all" inside the toggle group. Clicking the
  * selected chip again unselects it, which also means all. */

@@ -27,6 +27,32 @@ export type Score = { model: string; metric: string; value: number };
 export type RankingRow = { model: string; metric: string; rows: number; mean: number; sum: number };
 export type Spend = { total: number; byProvider: Record<string, number> };
 
+export const statsRanges = ["today", "7d", "30d"] as const;
+export type StatsRange = (typeof statsRanges)[number];
+/** Call counts, spend, tokens and latency. "aborted" calls were stopped by the page (a newer turn replaced
+ * them), so they are not failures. Latency percentiles are over successful calls only. */
+export type CallStats = {
+  calls: number;
+  failed: number;
+  aborted: number;
+  usd: number;
+  inputTokens: number;
+  outputTokens: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+};
+/** The call log, summed for the Stats page. No visitor ids or IP hashes, only counts. */
+export type Stats = {
+  range: StatsRange;
+  since: string;
+  /** One bucket per UTC hour for today, else one per UTC day. `at` is the start of the bucket. */
+  series: { at: string; calls: number; failed: number; usd: number }[];
+  totals: CallStats & { visitors: number; runs: number };
+  models: (CallStats & { model: string; provider: string })[];
+  games: { game: string; runs: number; calls: number; usd: number }[];
+  errors: { code: string; calls: number }[];
+};
+
 const schema = [
   `CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
@@ -196,10 +222,90 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
         .all(params);
     },
 
+    /** The call log since 00:00 UTC today, or over the last 7 or 30 days (today included). */
+    stats(range: StatsRange, now = new Date()): Stats {
+      const days = { today: 1, "7d": 7, "30d": 30 }[range];
+      const start = new Date(today(now));
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+      const since = start.toISOString();
+      const hourly = range === "today";
+      // The bucket key is a prefix of started_at: "2026-10-17T05" for an hour, "2026-10-17" for a day.
+      const width = hourly ? 13 : 10;
+      const counts = `COUNT(*) AS calls,
+        COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != 'aborted') AS failed,
+        COALESCE(SUM(cost_usd), 0) AS usd`;
+
+      type Bucket = { at: string; calls: number; failed: number; usd: number };
+      const buckets = new Map(
+        db
+          .query<Bucket, { since: string }>(`SELECT substr(started_at, 1, ${width}) AS at, ${counts} FROM calls WHERE started_at >= $since GROUP BY at`)
+          .all({ since })
+          .map((row) => [row.at, row]),
+      );
+      const step = hourly ? 3_600_000 : 86_400_000;
+      const series = Array.from({ length: hourly ? 24 : days }, (_, i) => {
+        const at = new Date(start.getTime() + i * step).toISOString();
+        const row = buckets.get(at.slice(0, width));
+        return { at, calls: row?.calls ?? 0, failed: row?.failed ?? 0, usd: row?.usd ?? 0 };
+      });
+
+      type ModelRow = Omit<CallStats, "p50Ms" | "p95Ms"> & { model: string; provider: string };
+      const rows = db
+        .query<ModelRow, { since: string }>(`SELECT model, provider, ${counts},
+            COUNT(*) FILTER (WHERE error_code = 'aborted') AS aborted,
+            COALESCE(SUM(input_tokens), 0) AS inputTokens,
+            COALESCE(SUM(output_tokens), 0) AS outputTokens
+          FROM calls WHERE started_at >= $since GROUP BY model, provider ORDER BY calls DESC, model`)
+        .all({ since });
+      const latencies = db
+        .query<{ model: string; ms: number }, { since: string }>("SELECT model, latency_ms AS ms FROM calls WHERE started_at >= $since AND error_code IS NULL")
+        .all({ since });
+      const byModel = Map.groupBy(latencies, (row) => row.model);
+      const models = rows.map((row) => ({ ...row, ...percentiles((byModel.get(row.model) ?? []).map((r) => r.ms)) }));
+
+      const people = db
+        .query<{ visitors: number; runs: number }, { since: string }>(
+          "SELECT COUNT(DISTINCT visitor) AS visitors, COUNT(DISTINCT run_id) AS runs FROM calls WHERE started_at >= $since",
+        )
+        .get({ since });
+      const sum = (key: "calls" | "failed" | "aborted" | "usd" | "inputTokens" | "outputTokens") => rows.reduce((total, row) => total + row[key], 0);
+      const totals = {
+        calls: sum("calls"),
+        failed: sum("failed"),
+        aborted: sum("aborted"),
+        usd: sum("usd"),
+        inputTokens: sum("inputTokens"),
+        outputTokens: sum("outputTokens"),
+        ...percentiles(latencies.map((r) => r.ms)),
+        visitors: people?.visitors ?? 0,
+        runs: people?.runs ?? 0,
+      };
+
+      const games = db
+        .query<Stats["games"][number], { since: string }>(`SELECT r.game AS game, COUNT(DISTINCT c.run_id) AS runs, COUNT(*) AS calls,
+            COALESCE(SUM(c.cost_usd), 0) AS usd
+          FROM calls c JOIN runs r ON r.id = c.run_id WHERE c.started_at >= $since GROUP BY r.game ORDER BY calls DESC, game`)
+        .all({ since });
+      const errors = db
+        .query<Stats["errors"][number], { since: string }>(`SELECT error_code AS code, COUNT(*) AS calls
+          FROM calls WHERE started_at >= $since AND error_code IS NOT NULL GROUP BY error_code ORDER BY calls DESC, code`)
+        .all({ since });
+
+      return { range, since, series, totals, models, games, errors };
+    },
+
     close(): void {
       db.close();
     },
   };
+}
+
+/** The median and the 95th percentile (nearest rank), or null without values. */
+function percentiles(values: number[]): { p50Ms: number | null; p95Ms: number | null } {
+  if (values.length === 0) return { p50Ms: null, p95Ms: null };
+  const sorted = values.toSorted((a, b) => a - b);
+  const rank = (p: number) => sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+  return { p50Ms: rank(0.5), p95Ms: rank(0.95) };
 }
 
 /** Replaces image and audio data in a JSON call with a hash and a size, so the database keeps no media. */

@@ -14,7 +14,7 @@ import { cheapModels, gatewayCostUsd, generateText, transcribe } from "@system-o
 import type { BunRequest } from "bun";
 import { type Budget, overBudget, overShare } from "./budget.ts";
 import type { ModelEntry } from "./models.ts";
-import { redact, type Score, type Store, fingerprint } from "./store.ts";
+import { redact, type Score, type Stats, type StatsRange, type Store, fingerprint, statsRanges } from "./store.ts";
 
 export type Transcription = { text: string; language: string | undefined; durationInSeconds: number | undefined; usage: Usage };
 export type Transcriber = (clip: AudioPart, signal: AbortSignal) => Promise<Transcription>;
@@ -86,6 +86,9 @@ const idPattern = /^[a-z0-9-]{1,40}$/;
 const MAX_OPEN_CALLS = { visitor: 8, ip: 16 };
 /** New runs per IP and window, so nobody can fill the database with empty runs. */
 const MAX_RUNS = { count: 60, windowMs: 10 * 60_000 };
+const STATS_CACHE_MS = 15_000;
+/** Run names come from the browser, so the public Stats page names only the site's games and sums the rest as "other". */
+const listedGame = /^(arena|plane)-(lockstep|realtime)$|^attention-(live|still)$|^setup-(arena|attention)$|^voice-(free|missions)$/;
 const metricPattern = /^[a-z0-9_]{1,40}$/;
 
 export function createApi({ store, models, budget, transcriber = gatewayTranscriber, generator = gatewayGenerator }: Deps) {
@@ -101,6 +104,22 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     return entry;
   };
   const publicMode = budget.visitorUsd !== undefined || budget.ipUsd !== undefined;
+  // The Stats page polls, and anyone can open it, so each range is computed at most every 15 s.
+  const statsCache = new Map<StatsRange, { at: number; stats: Stats }>();
+  const statsFor = (range: StatsRange): Stats => {
+    const hit = statsCache.get(range);
+    if (hit && Date.now() - hit.at < STATS_CACHE_MS) return hit.stats;
+    const raw = store.stats(range);
+    const games = new Map<string, Stats["games"][number]>();
+    for (const row of raw.games) {
+      const game = listedGame.test(row.game) ? row.game : "other";
+      const sum = games.get(game) ?? { game, runs: 0, calls: 0, usd: 0 };
+      games.set(game, { game, runs: sum.runs + row.runs, calls: sum.calls + row.calls, usd: sum.usd + row.usd });
+    }
+    const stats = { ...raw, games: [...games.values()].sort((a, b) => b.calls - a.calls) };
+    statsCache.set(range, { at: Date.now(), stats });
+    return stats;
+  };
   const open = new Map<string, number>();
   /** Takes a slot for one model call, or throws 429. Returns the function that frees it. */
   const takeSlot = (who: Who): (() => void) => {
@@ -281,6 +300,15 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         spent: store.spendToday(),
         ...(budget.visitorUsd !== undefined ? { you: { spent: store.shareToday(who).visitor, cap: budget.visitorUsd } } : {}),
       })),
+    },
+
+    "/api/stats": {
+      // ?range=today|7d|30d
+      GET: route((req) => {
+        const range = new URL(req.url).searchParams.get("range") ?? "today";
+        if (!statsRanges.includes(range as StatsRange)) throw new HttpError(400, "invalid_input", `range must be one of: ${statsRanges.join(", ")}`);
+        return statsFor(range as StatsRange);
+      }),
     },
 
     "/api/*": route(() => {
