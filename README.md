@@ -3,7 +3,7 @@
 Bun workspace with two packages:
 
 - `packages/ai` (`@system-one/ai`): one typed API over the System One / decision model providers. You send a state (text, JSON, images, audio) and typed questions. You get typed answers with probabilities.
-- `packages/arcade`: a React app where decision models play games against each other, and a server that stores every call and ranks the models. The first game is the Arena.
+- `packages/arcade`: a React app where decision models play games against each other, and a server that stores every call and ranks the models. Games: Arena and Attention (Voice is hidden for now).
 
 ```sh
 bun install
@@ -104,7 +104,7 @@ Games run in the browser and call the server. The server holds the keys, checks 
 | `POST /api/transcribe` | `{runId, audio}` (a data URL) -> `{text, language, usage, latencyMs}` |
 | `POST /api/generate` | `{runId, prompt, system?}` -> `{text, usage, latencyMs}`. The cheap text model (`mistral/mistral-nemo`), only for inputs that a decision cannot give. |
 | `POST /api/runs/:id/scores` | `{scores: [{model, metric, value}]}` |
-| `GET /api/rankings?game=` | mean and sum per model and metric |
+| `GET /api/rankings?game=a,b&config.policy=top` | mean and sum per model and metric, over one or more games. `config.<key>=<value>` keeps only runs whose config has that value. |
 | `GET /api/budget` | the caps and today's spend |
 
 Errors are `{error: {code, message}}`: 400 for bad input, 429 `budget_exceeded`, 502 for a provider error.
@@ -113,12 +113,17 @@ The database has 3 tables: `runs`, `calls` (every decide, transcribe and generat
 
 Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429, and the Arena pauses.
 
-Arena: 2 to 6 models on a circle. Each turn every model answers `move`, `target` and `fire`. Two clocks:
+Arena: 2 to 6 models on a field. Each turn every model answers `move`, `target` and `fire`. Two fields:
+
+- **Ring** (`arena-*` rankings): models stand on a circle and step along it. A shot lands at once, with a hit chance that drops with distance.
+- **Plane** (`plane-*` rankings, engine in `packages/arcade/src/games/plane/`): a 20 by 20 square. Models step in 12 clock directions, walls and other models block them, and a shot flies 3 units per tick, so it can be dodged. One shot in flight per model. The state gives distances and clock directions, and warns about incoming shots.
+
+Two clocks:
 
 - **Lockstep**: every model decides, then the turn resolves. It measures judgment.
 - **Real-time**: each model calls again as soon as its answer lands, and acts on each new answer. Fast models act more often. It measures speed and judgment.
 
-Each clock has its own ranking (`arena-lockstep`, `arena-realtime`). If nobody fires for N turns in a row (default 10, "Draw after" in the setup), the match ends in a draw and nobody wins. The models know this rule and see the count. Draws and the share of "stay" moves show up in the rankings.
+Each field and clock has its own ranking (`arena-lockstep`, `plane-realtime`, ...). The Ranking tab filters by field, clock, policy, provider and model, and sorts by any column. If nobody fires for N turns in a row (default 10, "Draw after" in the setup), the match ends in a draw and nobody wins. The models know this rule and see the count. Draws and the share of "stay" moves show up in the rankings.
 
 Presets are named setups worth watching (or recording). Pick one in the setup, or open `#/arena/<id>`. They live in `packages/arcade/src/games/arena/presets.ts`. Models are not fully deterministic, so a preset repeats the setup and the seed, not always the match.
 
@@ -139,16 +144,35 @@ What are the models curious about? 1 to 3 judges explore the same input, each on
 - `move`: zoom in 3x around that cell, step back, or stop (live mode: stay).
 - `interest`: boring, mild, interesting or fascinating.
 
-- **Live webcam** (`#/attention`, the default): the grid always covers the whole frame, so a judge sees the bigger picture every turn and can look anywhere, also when zoomed in. Zoom (1x, 3x, 9x) is centered on the chosen cell, and the zoomed view comes as a second image. Each judge calls again every 500 ms at most. The page draws each judge's view and focus cell on the video, and a live zoomed crop per judge. A session lasts 60 s and costs a few cents. The webcam is mirrored for the screen and for the models, so a cell on screen is the cell the model names.
+- **Live webcam** (`#/attention`, the default): the grid always covers the whole frame, so a judge sees the bigger picture every turn and can look anywhere, also when zoomed in. Zoom (1x, 3x, 9x) is centered on the chosen cell, and the zoomed view comes as a second image. Each judge calls again every 500 ms at most. The page draws each judge's view and focus cell on the video, and a live zoomed crop per judge. A session lasts 30 s and costs a few cents. The webcam is mirrored for the screen and for the models, so a cell on screen is the cell the model names.
 - **Pictures** (`#/attention/<id>`): sub-squares. The grid covers the judge's view, and "deeper" zooms 3x into a cell, so the next grid splits that part again. The judge sees its last 5 turns, and below the top level the whole picture with its view in red and its earlier views in gray. 6 generated scenes in `packages/arcade/src/games/attention/images/`, made once with `bun packages/arcade/scripts/attention-images.ts`. Lockstep rounds, up to 12. Use them to compare models on the same input.
 
 Live mode names no cell in the text and has no memory. A named cell pulls the next answer to it: with "zoomed in 3x around C7", Clef Flash kept answering C7 for 38 answers while the scene moved.
 
-Rankings: `attention-live` and `attention-still`, with max and mean depth, step-backs, interest, decisiveness (the mean top-cell probability), regions and turns.
+Each interest level has a reaction emoji (😐 🙂 😮 🤩). The page shows each judge's last reaction on the picture.
+
+**Your own files:** the Upload tile takes a photo (played like a picture) or a video (played like the webcam, not mirrored). The file stays in the browser as an object URL. Only the frames go to the models, as with the webcam.
+
+Rankings: `attention-live` and `attention-still`, with max and mean depth, step-backs, interest, the share of each reaction, decisiveness (the mean top-cell probability), regions and turns.
 
 A probe on 2026-10-16 found that every model can name the cell of a red dot on this grid (12 of 12 for most models, 11 of 12 for Clef). No provider rejected 81 options.
 
+### The page
+
+- **Stack:** React 19, Tailwind 4 through `bun-plugin-tailwind` (set in `bunfig.toml` at the repo root, so `bun run dev`, `bun run start` and Docker all use it), shadcn components in `packages/arcade/src/web/components/ui/` (add more with `cd packages/arcade && bunx shadcn@latest add <name>`), Lucide icons, and the Geist fonts. The provider logos in `src/web/logos/` come from LobeHub's static icon set (MIT), and TypeSafe's from its site.
+- **Player bar:** the controls sit at the bottom of every game page. Keys: Space start, pause or resume. S stop. N next turn while paused. E edit the setup after a game. F focus mode. G and R switch the Game and Ranking tabs.
+- **Setup in words:** in the Arena, "Describe" takes a sentence ("all Jevs on a plane, real-time"). Jev reads it with one decision call (about 250 ms and $0.0001): how the models are picked, the count, each player, and the game's options, each with a "not said" answer. Logic and tests: `src/web/lib/setup.ts`, `test/setup.test.ts`.
+
+### Recording a clip
+
+1. Open the game, set it up, and press F (or Focus). Focus mode hides the top bar, the setup and the tabs, and fits the stage to the window.
+2. The button in the corner of the video or the arena puts only that view in full screen.
+3. Record at 1280x720 or more with the browser in full screen. A live Attention session lasts 30 s.
+
 ### Voice and the Acme page
+
+Hidden for now: `#/voice` still works, but the page lists only Arena and Attention, and the Voice page keeps its first look.
+
 
 `/acme` is a mock shop app as a real page. Its state changes only through its tools: each screen registers its own tools, plus `go_to`, `go_back`, `set_language` and `set_theme`. The page exposes them 3 ways:
 

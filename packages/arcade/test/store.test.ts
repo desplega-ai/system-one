@@ -47,6 +47,18 @@ describe("store", () => {
     ]);
   });
 
+  test("ranks over several games, and keeps only runs whose config matches", () => {
+    const store = openStore(":memory:");
+    const top = store.createRun("arena-lockstep", { policy: "top" });
+    const sample = store.createRun("arena-realtime", { policy: "sample" });
+    store.addScores(top, [{ model: "jev", metric: "win", value: 1 }]);
+    store.addScores(sample, [{ model: "jev", metric: "win", value: 0 }]);
+
+    expect(store.ranking(["arena-lockstep", "arena-realtime"])).toEqual([{ model: "jev", metric: "win", rows: 2, mean: 0.5, sum: 1 }]);
+    expect(store.ranking(["arena-lockstep", "arena-realtime"], { policy: "sample" })).toEqual([{ model: "jev", metric: "win", rows: 1, mean: 0, sum: 0 }]);
+    expect(() => store.ranking("arena-lockstep", { "policy') OR 1=1 --": "x" })).toThrow();
+  });
+
   test("redact() keeps text and replaces media with a hash and a size", () => {
     const redacted = redact({ state: ["Frames:", { $image: "data:image/png;base64,AAAA" }, { hp: 3 }], questions: {} });
     expect(redacted.state).toEqual(["Frames:", { $image: { sha256: expect.any(String), bytes: 3 } }, { hp: 3 }]);

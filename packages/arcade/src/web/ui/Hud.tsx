@@ -1,4 +1,6 @@
 import type { Usage } from "@system-one/ai";
+import { Activity, AlertTriangle, ArrowDownUp, Coins, Timer } from "lucide-react";
+import type { ReactNode } from "react";
 import type { BudgetInfo } from "../lib/api.ts";
 
 /** Totals for one run. The browser sums them from the /api/decide responses. */
@@ -20,24 +22,34 @@ export function addCall(stats: RunStats, call: { usage: Usage; latencyMs: number
 
 export const usd = (n: number) => `$${n >= 1 ? n.toFixed(2) : n >= 0.01 ? n.toFixed(4) : n.toFixed(6)}`;
 
-export function Hud({ stats, budget }: { stats: RunStats; budget?: BudgetInfo }) {
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
+/** The run totals in one mono line. `short` leaves out the tokens. The top bar shows the budget, so only the hidden Voice page passes it. */
+export function Hud({ stats, budget, short }: { stats: RunStats; budget?: BudgetInfo; short?: boolean }) {
   return (
-    <div className="hud">
-      <span>{stats.calls} calls</span>
-      {stats.errors > 0 && <span className="refused">{stats.errors} errors</span>}
-      <span>
-        {stats.inputTokens.toLocaleString()} in / {stats.outputTokens.toLocaleString()} out
-      </span>
-      <span>{usd(stats.costUsd)}</span>
-      <span>{stats.calls > 0 ? Math.round(stats.latencyMs / stats.calls) : 0} ms mean</span>
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-xs tabular-nums whitespace-nowrap text-muted-foreground">
+      <Stat icon={<Activity />} value={`${stats.calls} calls`} />
+      {!short && <Stat icon={<ArrowDownUp />} value={`${compact.format(stats.inputTokens)} in / ${compact.format(stats.outputTokens)} out`} />}
+      <Stat icon={<Timer />} value={`${stats.calls > 0 ? Math.round(stats.latencyMs / stats.calls) : 0} ms mean`} />
+      <Stat icon={<Coins />} value={usd(stats.costUsd)} />
+      {stats.errors > 0 && <Stat icon={<AlertTriangle />} value={`${stats.errors} errors`} className="text-destructive" />}
       {budget && <BudgetLine budget={budget} />}
     </div>
   );
 }
 
+function Stat({ icon, value, className }: { icon: ReactNode; value: string; className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:opacity-70 ${className ?? ""}`}>
+      {icon}
+      {value}
+    </span>
+  );
+}
+
 export function BudgetLine({ budget }: { budget: BudgetInfo }) {
   return (
-    <span className="muted">
+    <span>
       today {usd(budget.spent.total)}
       {budget.dailyUsd !== undefined && ` of ${usd(budget.dailyUsd)}`}
     </span>

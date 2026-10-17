@@ -1,20 +1,34 @@
-import { decisionStream } from "@system-one/ai";
-import { useEffect, useRef, useState } from "react";
-import { ApiError, api, type BudgetInfo, type ModelInfo } from "../../web/lib/api.ts";
-import { useWebcam } from "../../web/lib/hooks.ts";
+import { type Answer, decisionStream } from "@system-one/ai";
+import { Camera, CameraOff, Film, ImageIcon, Upload } from "lucide-react";
+import { cn } from "cn";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/web/components/ui/alert";
+import { Badge } from "@/web/components/ui/badge";
+import { Button } from "@/web/components/ui/button";
+import { Card } from "@/web/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/tooltip";
+import { type FrameInfo, GameFrame } from "../../web/components/GameFrame.tsx";
+import { ApiError, api, type ModelInfo } from "../../web/lib/api.ts";
+import { refreshBudget } from "../../web/lib/budget.ts";
+import { useSquareSide, useWebcam } from "../../web/lib/hooks.ts";
 import { cropImage, fullView, gridImage, overviewImage, type Source, squareOf } from "../../web/lib/media.ts";
 import { Board } from "../../web/ui/Board.tsx";
+import { FullscreenButton } from "../../web/ui/FullscreenButton.tsx";
 import { agentColors } from "../../web/ui/colors.ts";
-import { addCall, emptyStats, Hud, type RunStats, usd } from "../../web/ui/Hud.tsx";
+import { addCall, emptyStats, type RunStats, usd } from "../../web/ui/Hud.tsx";
+import { ModelName } from "../../web/ui/ModelName.tsx";
 import { ModelPicker } from "../../web/ui/ModelPicker.tsx";
 import { ProbabilityBars } from "../../web/ui/ProbabilityBars.tsx";
+import { FilterChips, useModelFilters } from "../../web/ui/RankingFilters.tsx";
+import { ResultCard } from "../../web/ui/ResultCard.tsx";
+import { SetupRow } from "../../web/ui/SetupRow.tsx";
 import {
   createGame,
   currentView,
   depthOf,
   earlierViews,
   type Game,
-  history,
+  type InterestLevel,
   interestLevels,
   isOver,
   type Judge,
@@ -23,6 +37,7 @@ import {
   playLive,
   playRound,
   scores,
+  reactions,
   type Turn,
 } from "./engine.ts";
 import { attentionImages } from "./images.ts";
@@ -52,9 +67,10 @@ type Run = { runId: string; mode: Mode; abort: AbortController; elapsedMs: numbe
 const ROUND_PAUSE_MS = 600;
 /** Live mode: each judge calls at most this often. With 2 images a call, this keeps a session near $0.1. */
 const LIVE_EVERY_MS = 500;
-const LIVE_SECONDS = 60;
+const LIVE_SECONDS = 30;
+/** The side of each judge's zoomed view on its card, in CSS pixels. Smaller on phones. */
+const zoomPx = () => (window.innerWidth < 640 ? 96 : 120);
 const preferredJudges = ["cloudflare:clef-flash", "typesafe:jev-latest", "openai:gpt-6-luna"];
-const interestQuestion = { type: "score", instructions: "", levels: interestLevels } as const;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budget_exceeded";
@@ -62,7 +78,7 @@ const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budge
 /**
  * The call for one judge, built from the current picture or video frame.
  * Still: the grid on the judge's view, and the whole picture as image 2.
- * Live: the grid always on the whole frame (with the view as a red box), and the zoomed view as image 2.
+ * Live: the grid always on the whole frame, and the zoomed view as image 2.
  */
 function callFor(game: Game, judge: Judge, src: Source) {
   const side = squareOf(src).side;
@@ -75,23 +91,32 @@ function callFor(game: Game, judge: Judge, src: Source) {
   return { side, call: { state: stateFor(game, judge, images), questions: questionsFor(judge, game.mode, side) } };
 }
 
-/** `arg` is an image id or "webcam", for example #/attention/attic. */
-export function Attention({ arg }: { arg?: string }) {
+/** A file the user picked, for this page load only: an object URL, not an upload to the server. */
+let uploaded: { url: string; kind: "image" | "video"; name: string } | null = null;
+
+/** `arg` is an image id, "webcam" or "upload", for example #/attention/attic. */
+export function Attention({ arg, info }: { arg?: string; info: FrameInfo }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [slots, setSlots] = useState<string[]>([]);
   const [game, setGame] = useState<Game>();
   const [status, setStatus] = useState<Status>("setup");
   const [notice, setNotice] = useState<string>();
   const [stats, setStats] = useState<RunStats>(emptyStats);
-  const [budget, setBudget] = useState<BudgetInfo>();
   const [boardKey, setBoardKey] = useState(0);
   const [picture, setPicture] = useState<HTMLImageElement>();
   const [remaining, setRemaining] = useState(LIVE_SECONDS);
+  // The ranking tab's own filters. "" means all.
+  const [rankMode, setRankMode] = useState("");
+  const modelFilters = useModelFilters(models);
 
-  // The webcam is the main input. The pictures are for repeatable comparisons.
-  const source = arg && pictureUrls[arg] ? arg : "webcam";
-  const mode: Mode = source === "webcam" ? "live" : "still";
+  // The webcam is the main input. The pictures are for repeatable comparisons. An uploaded photo plays
+  // like a picture, an uploaded video like the webcam (not mirrored).
+  const [uploadVersion, setUploadVersion] = useState(0);
+  const source = arg === "upload" && uploaded ? "upload" : arg && pictureUrls[arg] ? arg : "webcam";
+  const uploadedVideo = source === "upload" && uploaded?.kind === "video";
+  const mode: Mode = source === "webcam" || uploadedVideo ? "live" : "still";
   const webcam = useWebcam();
+  const fileVideo = useRef<HTMLVideoElement>(null);
 
   const run = useRef<Run | null>(null);
   const gameRef = useRef<Game | undefined>(undefined);
@@ -102,6 +127,13 @@ export function Attention({ arg }: { arg?: string }) {
   const mainCanvas = useRef<HTMLCanvasElement>(null);
   const zoomCanvases = useRef<Record<string, HTMLCanvasElement | null>>({});
   const shown = useRef<Record<string, Shown>>({});
+  const [pictureBox, pictureWidth] = useSquareSide<HTMLDivElement>();
+  const pictureSize = useRef(0);
+  pictureSize.current = pictureWidth;
+  // The judge cards: the game's judges, or before a game the judges to be.
+  const cards = game?.judges ?? (slots.length > 0 ? createGame(slots, mode).judges : []);
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
 
   useEffect(() => {
     api.models().then((list) => {
@@ -110,10 +142,10 @@ export function Attention({ arg }: { arg?: string }) {
       const preferred = preferredJudges.filter((key) => usable.some((m) => m.key === key));
       setSlots(preferred.length > 0 ? preferred : usable.slice(0, 3).map((m) => m.key));
     }, (e) => setNotice(message(e)));
-    api.budget().then(setBudget, () => {});
   }, []);
 
-  // Open the camera for a preview, or load the picture and turn the camera off.
+  // Open the camera for a preview, or load the picture and turn the camera off. An uploaded video plays
+  // in its own hidden <video>.
   useEffect(() => {
     setPicture(undefined);
     if (source === "webcam") {
@@ -121,36 +153,48 @@ export function Attention({ arg }: { arg?: string }) {
       return;
     }
     webcam.stop();
+    if (uploadedVideo) return;
     const img = new Image();
     img.onload = () => setPicture(img);
-    img.src = pictureUrls[source]!;
-  }, [source]);
+    img.src = source === "upload" ? uploaded!.url : pictureUrls[source]!;
+  }, [source, uploadVersion]);
 
   const sourceEl = (): Source | null => {
-    if (source !== "webcam") return picture ?? null;
-    const video = webcam.videoRef.current;
-    return video && video.videoWidth > 0 ? video : null;
+    const video = source === "webcam" ? webcam.videoRef.current : uploadedVideo ? fileVideo.current : null;
+    if (!video) return picture ?? null;
+    return video.videoWidth > 0 ? video : null;
   };
 
-  // Draw on every animation frame: the video moves, and the squares glide.
+  /** Keeps a picked file for this page load, and shows it. Nothing leaves the browser but the frames for the models. */
+  function upload(file: File) {
+    if (uploaded) URL.revokeObjectURL(uploaded.url);
+    uploaded = { url: URL.createObjectURL(file), kind: file.type.startsWith("video/") ? "video" : "image", name: file.name };
+    setUploadVersion((v) => v + 1);
+    window.location.hash = "#/attention/upload";
+  }
+
+  // Draw on every animation frame: the video moves, and the squares glide. Before a game, the cards show
+  // the judges to be, each looking at the whole frame.
   useEffect(() => {
     let frame = 0;
     const draw = () => {
       frame = requestAnimationFrame(draw);
+      // A video file must keep playing, also after the browser paused it in the background.
+      if (fileVideo.current?.paused) void fileVideo.current.play().catch(() => {});
       const src = sourceEl();
       if (!src || !mainCanvas.current) return;
       const g = gameRef.current;
       const judges = g?.judges ?? [];
       for (const judge of judges) shown.current[judge.id] = glide(shown.current[judge.id], judge, g!.mode);
-      drawPicture(mainCanvas.current, src, judges, shown.current, g?.mode ?? mode);
-      for (const judge of judges) {
+      drawPicture(mainCanvas.current, src, judges, shown.current, g?.mode ?? mode, pictureSize.current || 480);
+      for (const judge of g ? judges : cardsRef.current) {
         const canvas = zoomCanvases.current[judge.id];
-        if (canvas) drawZoom(canvas, src, judge, shown.current[judge.id]!);
+        if (canvas) drawZoom(canvas, src, judge, shown.current[judge.id] ?? glide(undefined, judge, mode), zoomPx());
       }
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [source, picture, webcam.status]);
+  }, [source, picture, webcam.status, uploadVersion]);
 
   const label = (key: string) => models.find((m) => m.key === key)?.label ?? key;
   const commit = (next: Game | undefined) => {
@@ -179,7 +223,7 @@ export function Attention({ arg }: { arg?: string }) {
     } catch (e) {
       setNotice(`Could not save scores: ${message(e)}`);
     }
-    api.budget().then(setBudget, () => {});
+    refreshBudget();
   }
 
   /** Still mode: every active judge answers, then the round applies. Returns true when the loop should stop. */
@@ -283,7 +327,7 @@ export function Attention({ arg }: { arg?: string }) {
     run.current?.abort.abort();
     run.current = null;
     try {
-      if (mode === "live" && webcam.status !== "on" && !(await webcam.start())) return;
+      if (source === "webcam" && webcam.status !== "on" && !(await webcam.start())) return;
       if (mode === "still" && !picture) return setNotice("The picture is still loading.");
       const runId = await api.createRun(`attention-${mode}`, { models: slots, source, mode });
       const current: Run = { runId, mode, abort: new AbortController(), elapsedMs: 0 };
@@ -315,124 +359,318 @@ export function Attention({ arg }: { arg?: string }) {
     setStats(emptyStats);
     changeStatus("setup");
     setNotice("Stopped. The game was not scored.");
-    api.budget().then(setBudget, () => {});
+    refreshBudget();
   }
 
-  const playing = status === "running" || status === "paused";
-  const boardGame = `attention-${run.current?.mode ?? mode}`;
+  const sourceName = source === "webcam" ? "Live webcam" : source === "upload" ? (uploaded?.name ?? "Your file") : (attentionImages.find((img) => img.id === source)?.name ?? source);
+  const elapsed = LIVE_SECONDS - remaining;
+  const progress =
+    game?.mode === "live"
+      ? { value: elapsed / LIVE_SECONDS, left: `0:${String(elapsed).padStart(2, "0")}`, right: `0:${String(LIVE_SECONDS).padStart(2, "0")}` }
+      : game
+        ? { value: game.round / MAX_ROUNDS, left: `round ${game.round}`, right: `${MAX_ROUNDS}` }
+        : undefined;
+  const subtitle = `${sourceName} · ${cards.length} ${cards.length === 1 ? "judge" : "judges"} · ${status === "running" ? (mode === "live" ? "watching" : "exploring") : status}`;
 
   return (
-    <section className="attention">
-      <div className="game-setup card">
-        <div className="row">
-          <label>
-            Input{" "}
-            <select value={source} onChange={(e) => (window.location.hash = `#/attention/${e.target.value}`)} disabled={playing}>
-              <option value="webcam">Live webcam ({LIVE_SECONDS} s)</option>
-              {attentionImages.map((img) => (
-                <option key={img.id} value={img.id}>
-                  Picture: {img.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span className="muted">
-            {mode === "live"
-              ? "Each judge keeps choosing where to look on your live camera, about twice a second. Move, hold things up, and watch the squares follow."
-              : `Each judge picks the cell it is most curious about, then zooms in, steps back or stops. Up to ${MAX_ROUNDS} rounds.`}
-          </span>
+    <GameFrame
+      info={info}
+      controls={{
+        status,
+        startLabel: mode === "live" ? "Start watching" : "Start exploring",
+        canStart: slots.length > 0,
+        onStart: start,
+        onPause: () => changeStatus("paused"),
+        onResume: resume,
+        onStop: stop,
+        onSetup: () => {
+          commit(undefined);
+          changeStatus("setup");
+        },
+      }}
+      stats={stats}
+      players={cards.map((judge) => ({ label: label(judge.model), color: agentColors[judge.id]! }))}
+      subtitle={subtitle}
+      progress={progress}
+      live={mode === "live"}
+      board={
+        <Board
+          game={rankMode ? [`attention-${rankMode}`] : ["attention-live", "attention-still"]}
+          include={modelFilters.include}
+          toolbar={
+            <>
+              <FilterChips
+                label="Input"
+                value={rankMode}
+                onChange={setRankMode}
+                options={[
+                  { value: "", label: "All" },
+                  { value: "live", label: "Webcam and videos" },
+                  { value: "still", label: "Pictures" },
+                ]}
+              />
+              {modelFilters.controls}
+            </>
+          }
+          models={models}
+          refreshKey={boardKey}
+          columns={[
+            { metric: "max_depth", label: "Max depth", format: (n) => n.toFixed(1) },
+            { metric: "mean_depth", label: "Mean depth" },
+            { metric: "step_backs", label: "Step-backs", format: (n) => n.toFixed(1) },
+            { metric: "mean_interest", label: "Interest (0-3)" },
+            ...interestLevels.map((level) => ({ metric: `reaction_${level}`, label: reactions[level], format: (n: number) => `${Math.round(n * 100)}%` })),
+            { metric: "decisiveness", label: "Decisive", format: (n) => `${Math.round(n * 100)}%` },
+            { metric: "regions", label: "Regions", format: (n) => n.toFixed(1) },
+            { metric: "rounds", label: "Turns", format: (n) => n.toFixed(1) },
+            { metric: "latency_ms", label: "Latency", format: (n) => `${Math.round(n)} ms` },
+            { metric: "cost_usd", label: "Cost", format: usd },
+          ]}
+        />
+      }
+    >
+      {notice && (
+        <Alert data-chrome>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      )}
+
+      {status === "setup" && (
+        <Card data-chrome className="gap-4 px-5 py-4">
+          <SetupRow label="Input">
+            <InputChooser value={source} onUpload={upload} />
+            <p className="text-sm text-muted-foreground">
+              {uploadedVideo
+                ? "Each judge looks again about twice a second while your video plays."
+                : mode === "live"
+                ? "Each judge looks again about twice a second. Move, hold things up, and watch the squares follow."
+                : `Each judge picks a cell, then zooms in, steps back or stops. Up to ${MAX_ROUNDS} rounds.`}
+            </p>
+          </SetupRow>
+          <SetupRow label="Judges">
+            <ModelPicker models={models} value={slots} onChange={setSlots} min={1} max={3} needs={["image"]} slotLabel={(i) => `Judge ${i + 1}`} />
+          </SetupRow>
+        </Card>
+      )}
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
+        <div
+          ref={pictureBox}
+          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-black lg:w-[min(52%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(52%,calc(100vh-11.5rem))] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:bg-black"
+        >
+          <canvas ref={mainCanvas} className="block" />
+          <FullscreenButton target={pictureBox} />
+          {mode === "live" && status === "running" && (
+            <div className="absolute top-3 left-3 flex items-center gap-2 rounded-md bg-black/60 px-2.5 py-1 font-mono text-xs backdrop-blur">
+              <span className="size-2 animate-pulse rounded-full bg-live" /> LIVE <span className="text-muted-foreground">{remaining}s</span>
+            </div>
+          )}
+          {source === "webcam" && webcam.status !== "on" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+              {webcam.status === "error" ? <CameraOff className="size-6 text-muted-foreground" /> : <Camera className="size-6 text-muted-foreground" />}
+              <p className="text-sm text-muted-foreground">
+                {webcam.status === "starting" ? "Opening the camera." : webcam.status === "error" ? `The camera did not open: ${webcam.error}` : "The camera is off."}
+              </p>
+              {webcam.status !== "starting" && (
+                <Button size="sm" variant="secondary" onClick={() => void webcam.start()}>
+                  <Camera /> Turn on the camera
+                </Button>
+              )}
+            </div>
+          )}
+          <video ref={webcam.videoRef} muted playsInline className="pointer-events-none absolute size-px opacity-0" />
+          {uploadedVideo && (
+            // Full size behind the canvas: Chrome pauses a muted video it thinks nobody sees (a 1 px, transparent one).
+            <video
+              key={uploadVersion}
+              ref={fileVideo}
+              src={uploaded!.url}
+              muted
+              loop
+              autoPlay
+              playsInline
+              onCanPlay={(e) => void e.currentTarget.play().catch(() => {})}
+              className="pointer-events-none absolute inset-0 -z-10 size-full object-cover"
+            />
+          )}
         </div>
-        <ModelPicker models={models} value={slots} onChange={setSlots} min={1} max={3} needs={["image"]} slotLabel={(i) => `Judge ${i + 1}`} />
-        <div className="row">
-          <button type="button" onClick={start} disabled={status === "running" || slots.length < 1}>
-            {status === "setup" ? "Start" : "New game"}
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-3">
+          {status === "over" && game && <AttentionResult game={game} label={label} elapsedMs={run.current?.elapsedMs ?? 0} />}
+          {cards.map((judge) => (
+            <JudgeCard
+              key={judge.id}
+              judge={judge}
+              mode={game?.mode ?? mode}
+              label={label(judge.model)}
+              waiting={!game}
+              canvasRef={(el) => {
+                zoomCanvases.current[judge.id] = el;
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    </GameFrame>
+  );
+}
+
+/** How the session ended, and where each judge looked. */
+function AttentionResult({ game, label, elapsedMs }: { game: Game; label: (key: string) => string; elapsedMs: number }) {
+  const detail =
+    game.mode === "live"
+      ? elapsedMs >= LIVE_SECONDS * 1000
+        ? `${LIVE_SECONDS} seconds are up.`
+        : "Every judge stopped."
+      : game.round >= MAX_ROUNDS
+        ? `${MAX_ROUNDS} rounds are done.`
+        : "Every judge has seen enough.";
+  return (
+    <ResultCard
+      title="Session over"
+      detail={detail}
+      rows={game.judges.map((judge) => {
+        const steps = judge.steps;
+        const counts = new Map<string, number>();
+        for (const s of steps) if (s.focus) counts.set(s.focus, (counts.get(s.focus) ?? 0) + 1);
+        const favorite = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+        return {
+          key: judge.id,
+          label: label(judge.model),
+          color: agentColors[judge.id]!,
+          out: judge.done && judge.errorsInARow > 0,
+          stats: [
+            `${steps.length} looks`,
+            `up to ${3 ** Math.max(0, ...steps.map((s) => s.depth))}x`,
+            ...(favorite ? [`mostly ${favorite}`] : []),
+            ...interestLevels.flatMap((level) => {
+              const n = steps.filter((s) => s.reaction === level).length;
+              return n > 0 ? [`${reactions[level]} ${n}`] : [];
+            }),
+          ],
+        };
+      })}
+    />
+  );
+}
+
+/** The webcam, then the 6 pictures, as square tiles. The choice lives in the URL. */
+function InputChooser({ value, onUpload }: { value: string; onUpload: (file: File) => void }) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const tile = (id: string, name: string, content: ReactNode) => (
+    <Tooltip key={id}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={name}
+          aria-pressed={value === id}
+          onClick={() => (window.location.hash = `#/attention/${id}`)}
+          className={cn(
+            "flex size-14 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border bg-white/[0.03] text-muted-foreground transition",
+            value === id ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-card" : "opacity-60 hover:opacity-100",
+          )}
+        >
+          {content}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{name}</TooltipContent>
+    </Tooltip>
+  );
+  return (
+    <div className="flex flex-wrap gap-2.5">
+      {tile(
+        "webcam",
+        "Live webcam",
+        <>
+          <Camera className="size-5" />
+          <span className="caps text-[9px]">Live</span>
+        </>,
+      )}
+      {attentionImages.map((img) => tile(img.id, img.name, <img src={pictureUrls[img.id]} alt="" className="size-full object-cover" />))}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="Upload a photo or a video"
+            aria-pressed={value === "upload"}
+            onClick={() => fileInput.current?.click()}
+            className={cn(
+              "flex size-14 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border border-dashed bg-white/[0.03] text-muted-foreground transition",
+              value === "upload" ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-card" : "opacity-60 hover:opacity-100",
+            )}
+          >
+            {value === "upload" && uploaded?.kind === "video" ? <Film className="size-5" /> : value === "upload" ? <ImageIcon className="size-5" /> : <Upload className="size-5" />}
+            <span className="caps text-[9px]">{value === "upload" ? "Yours" : "Upload"}</span>
           </button>
-          {status === "running" && (
-            <button type="button" onClick={() => changeStatus("paused")}>
-              Pause
-            </button>
-          )}
-          {status === "paused" && (
-            <button type="button" onClick={resume}>
-              Resume
-            </button>
-          )}
-          {playing && (
-            <button type="button" onClick={stop}>
-              Stop
-            </button>
-          )}
-          <span className="muted">
-            {status}
-            {game && playing && (game.mode === "live" ? `, ${remaining} s left` : `, round ${game.round} of ${MAX_ROUNDS}`)}
-          </span>
-          {webcam.error && <span className="refused">Camera: {webcam.error}</span>}
-        </div>
-        {notice && <p className="refused">{notice}</p>}
-        <Hud stats={stats} budget={budget} />
-      </div>
-
-      <div className="attention-play">
-        <div>
-          <canvas ref={mainCanvas} className="picture" />
-          {mode === "live" && webcam.status !== "on" && <p className="muted">{webcam.status === "starting" ? "Opening the camera." : "The camera is off. Start opens it."}</p>}
-          <video ref={webcam.videoRef} muted playsInline className="offscreen" />
-        </div>
-        {game && (
-          <div className="agent-cards">
-            {game.judges.map((judge) => (
-              <div className={judge.done && judge.errorsInARow > 0 ? "card agent out" : "card agent"} key={judge.id}>
-                <div className="agent-head">
-                  <span className="swatch" style={{ background: agentColors[judge.id] }} />
-                  <strong>{judge.id}</strong>
-                  <span>{label(judge.model)}</span>
-                  <span className="hp">{judge.done ? (judge.errorsInARow > 0 ? "failed" : "stopped") : `zoom ${3 ** depthOf(judge, game.mode)}x`}</span>
-                </div>
-                <canvas
-                  className="zoom"
-                  ref={(el) => {
-                    zoomCanvases.current[judge.id] = el;
-                  }}
-                />
-                <div className="muted small">
-                  focus {judge.focus ?? "none"}
-                  {judge.trail.length > 0 && `, at ${judge.trail.join(" > ")}`}
-                </div>
-                <ProbabilityBars title="move" answer={judge.lastAnswers?.move} />
-                <ProbabilityBars title="interest" question={interestQuestion} answer={judge.lastAnswers?.interest} />
-                <ol className="memory muted small">
-                  {history(judge, 3).map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ol>
-                <div className="muted small">
-                  {judge.calls} calls, {judge.calls > 0 ? Math.round(judge.latencyMs / judge.calls) : 0} ms, {usd(judge.costUsd)}
-                  {judge.refusals > 0 && `, ${judge.refusals} refusals`}
-                  {judge.errors > 0 && `, ${judge.errors} errors`}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <h3>Rankings ({boardGame})</h3>
-      <Board
-        game={boardGame}
-        models={models}
-        refreshKey={boardKey}
-        columns={[
-          { metric: "max_depth", label: "Max depth", format: (n) => n.toFixed(1) },
-          { metric: "mean_depth", label: "Mean depth" },
-          { metric: "step_backs", label: "Step-backs", format: (n) => n.toFixed(1) },
-          { metric: "mean_interest", label: "Interest (0-3)" },
-          { metric: "decisiveness", label: "Decisive", format: (n) => `${Math.round(n * 100)}%` },
-          { metric: "regions", label: "Regions", format: (n) => n.toFixed(1) },
-          { metric: "rounds", label: "Turns", format: (n) => n.toFixed(1) },
-          { metric: "latency_ms", label: "Latency", format: (n) => `${Math.round(n)} ms` },
-          { metric: "cost_usd", label: "Cost", format: usd },
-        ]}
+        </TooltipTrigger>
+        <TooltipContent>{value === "upload" && uploaded ? `${uploaded.name}. Click to pick another file.` : "Your own photo or video. It stays in this browser."}</TooltipContent>
+      </Tooltip>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onUpload(file);
+          e.target.value = "";
+        }}
       />
-    </section>
+    </div>
+  );
+}
+
+/** One judge: its zoomed view in its color, then how interested it is and what it does next. */
+function JudgeCard({ judge, mode, label, waiting, canvasRef }: { judge: Judge; mode: Mode; label: string; waiting: boolean; canvasRef: (el: HTMLCanvasElement | null) => void }) {
+  const color = agentColors[judge.id]!;
+  const failed = judge.done && judge.errorsInARow > 0;
+  const state = failed ? "failed" : judge.done ? "stopped" : judge.focus ? `focus ${judge.focus}` : waiting ? "ready" : "looking";
+  return (
+    <Card className={cn("flex-row items-center gap-4 p-3 transition-opacity", failed && "opacity-50")}>
+      <div className="relative size-24 shrink-0 overflow-hidden rounded-lg sm:size-[120px]" style={{ boxShadow: `0 0 0 2px ${color}, 0 0 18px ${color}55` }}>
+        <canvas ref={canvasRef} className="block" />
+        <span className="absolute top-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px]">{3 ** depthOf(judge, mode)}x</span>
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-center gap-2">
+          <ModelName label={label} color={color} />
+          <Badge variant="outline" className="ml-auto font-mono text-[10px] text-muted-foreground">
+            {state}
+          </Badge>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] sm:gap-5">
+          <InterestMeter answer={judge.lastAnswers?.interest} color={color} />
+          <ProbabilityBars title="next" answer={judge.lastAnswers?.move} color={color} minRows={3} />
+        </div>
+        <div className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
+          {judge.calls} calls · {judge.calls > 0 ? Math.round(judge.latencyMs / judge.calls) : 0} ms · {usd(judge.costUsd)}
+          {mode === "still" && judge.trail.length > 0 && ` · ${judge.trail.join(" > ")}`}
+          {judge.refusals > 0 && ` · ${judge.refusals} refusals`}
+          {judge.errors > 0 && ` · ${judge.errors} errors`}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** Four segments, lit up to the level the judge picked. */
+function InterestMeter({ answer, color }: { answer: Answer | undefined; color: string }) {
+  const level = answer?.type === "score" ? answer.level : undefined;
+  const lit = level === undefined ? -1 : interestLevels.indexOf(level as (typeof interestLevels)[number]);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between">
+        <span className="caps text-[10px] text-muted-foreground">interest</span>
+        <span className="text-xs font-medium">
+          {level ? `${reactions[level as InterestLevel]} ${level}` : answer?.type === "refusal" ? "refused" : "waiting"}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {interestLevels.map((name, i) => (
+          <span key={name} className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+            <span className="block h-full rounded-full transition-opacity duration-300" style={{ background: color, opacity: i <= lit ? 1 : 0 }} />
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }

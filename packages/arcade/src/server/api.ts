@@ -203,9 +203,18 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
 
     "/api/rankings": {
       GET: route((req) => {
-        const game = new URL(req.url).searchParams.get("game");
-        if (!game || !idPattern.test(game)) throw new HttpError(400, "invalid_input", "pass ?game=");
-        return store.ranking(game);
+        // ?game=arena-lockstep,arena-realtime&config.policy=top
+        const params = new URL(req.url).searchParams;
+        const games = (params.get("game") ?? "").split(",").filter(Boolean);
+        if (games.length === 0 || games.length > 8 || !games.every((g) => idPattern.test(g))) throw new HttpError(400, "invalid_input", "pass ?game=");
+        const config: Record<string, string> = {};
+        for (const [key, value] of params) {
+          if (!key.startsWith("config.")) continue;
+          const name = key.slice("config.".length);
+          if (!/^[a-z_]{1,40}$/.test(name) || !/^[\w.:-]{1,100}$/.test(value)) throw new HttpError(400, "invalid_input", `bad filter ${key}`);
+          config[name] = value;
+        }
+        return store.ranking(games, config);
       }),
     },
 

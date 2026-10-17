@@ -1,0 +1,3 @@
+# The arcade package owns the plugin (bun installs it under packages/arcade/node_modules).
+[serve.static]
+plugins = ["./packages/arcade/node_modules/bun-plugin-tailwind"]

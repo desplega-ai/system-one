@@ -78,12 +78,6 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   const selectSpend = db.query<{ provider: string; usd: number }, { since: string }>(
     "SELECT provider, COALESCE(SUM(cost_usd), 0) AS usd FROM calls WHERE started_at >= $since GROUP BY provider",
   );
-  const selectRanking = db.query<RankingRow, { game: string }>(`SELECT s.model AS model, s.metric AS metric,
-      COUNT(*) AS rows, AVG(s.value) AS mean, SUM(s.value) AS sum
-    FROM scores s JOIN runs r ON r.id = s.run_id
-    WHERE r.game = $game
-    GROUP BY s.model, s.metric
-    ORDER BY s.model, s.metric`);
 
   return {
     createRun(game: string, config: JsonValue): string {
@@ -128,9 +122,28 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
       return { total: Object.values(byProvider).reduce((a, b) => a + b, 0), byProvider };
     },
 
-    /** One row per model and metric, over all runs of a game. */
-    ranking(game: string): RankingRow[] {
-      return selectRanking.all({ game });
+    /**
+     * One row per model and metric, over all runs of the games. `config` keeps only the runs whose config
+     * has these values, for example { policy: "top" }. Keys must be plain words: they go into the SQL.
+     */
+    ranking(games: string | string[], config: Record<string, string> = {}): RankingRow[] {
+      const list = typeof games === "string" ? [games] : games;
+      const keys = Object.keys(config);
+      if (list.length === 0) return [];
+      if (keys.some((key) => !/^[a-z_]{1,40}$/.test(key))) throw new Error("config keys must be plain words");
+      const where = [
+        `r.game IN (${list.map((_, i) => `$g${i}`).join(", ")})`,
+        ...keys.map((key, i) => `json_extract(r.config, '$.${key}') = $c${i}`),
+      ];
+      const params = { ...Object.fromEntries(list.map((g, i) => [`g${i}`, g])), ...Object.fromEntries(keys.map((key, i) => [`c${i}`, config[key]!])) };
+      return db
+        .query<RankingRow, Record<string, string>>(`SELECT s.model AS model, s.metric AS metric,
+            COUNT(*) AS rows, AVG(s.value) AS mean, SUM(s.value) AS sum
+          FROM scores s JOIN runs r ON r.id = s.run_id
+          WHERE ${where.join(" AND ")}
+          GROUP BY s.model, s.metric
+          ORDER BY s.model, s.metric`)
+        .all(params);
     },
 
     close(): void {

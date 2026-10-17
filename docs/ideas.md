@@ -12,7 +12,10 @@ Built in `packages/arcade` (see the README):
 
 - **Arena** (idea 4): lockstep and real-time, presets, stalemate rule.
 - **Attention** (new, from Taras): "what are you curious about?" on a 9x9 grid, with 3x zoom and a memory of 5 turns. Live webcam first, plus 6 generated pictures. It replaced the webcam games of idea 1 for now.
-- **Voice** (ideas 2 + 3): a hands-free voice controller for `/acme`, a mock shop page with WebMCP-style tools. Clef-Omni hears the audio, the other models read a transcript, and missions score them.
+- **Voice** (ideas 2 + 3): a hands-free voice controller for `/acme`, a mock shop page with WebMCP-style tools. Clef-Omni hears the audio, the other models read a transcript, and missions score them. Hidden for now.
+- **UI round** (2026-10-17, for an X video): dark theme, shadcn, logos, live previews on the home page, a player bar with keyboard keys, focus mode, full screen per view, and a Ranking tab with filters and sorting.
+- **Arena plane** (new): a square field with 12 directions, walls, collisions and shots that fly for a few ticks.
+- **Setup in words** (new): Jev turns "all Jevs on a plane, real-time" into the Arena setup with one decision call.
 
 What we saw:
 
@@ -28,6 +31,7 @@ What we saw:
 - **Attention, pictures:** all 3 judges (Clef Flash, Jev, Luna) went straight to the red umbrella in the market picture. Clef Flash and Jev start at the center cell (E5) when nothing stands out. With "stop exploring, you have seen enough", Luna stopped on its first turn while it rated the view "interesting". Tying each move to the interest fixed that. Models still go back and forth into the same cell, even with their memory.
 - **Attention, live:** on a panning fake camera, every judge chose "stay" at level 0 most of the time. Jev is very sure of its cell (96% mean top probability), Clef Flash spreads (10%). 297 calls in 60 s cost $0.03.
 - **A named cell pulls the answer to it.** Live, zoomed in, the state said "zoomed in 3x around C7" and the memory said "focus C7". Clef Flash then answered C7 (31 to 48%) on 38 answers in a row while the scene moved. At the whole frame its top cell had 5%. Without cell names and without memory, its focus moved on 24 of 34 zoomed answers, and Jev's on 38 of 66. Live mode now names no cell, and its grid always covers the whole frame. Still mode keeps its memory: worth testing whether the names there cause the E5 loops.
+- **Setup in words:** Jev got 5 of 5 test sentences right (about 230 ms, $0.0001 each), once each question had a "not said" option. With "keep the current value" and the current models in the state, it kept 2 of 3 current models for "all Jevs". The same pull as the named cell above.
 - **Voice:** a flat macOS voice saying "Quiero cancelar mi pedido ahora mismo" was "angry" for Clef-Omni (87%) and for Jev from the transcript (59 to 84%). So the words carry the mood here. The tone test with a real voice is still open.
 
 ## What we have to play with

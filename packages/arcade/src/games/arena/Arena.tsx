@@ -1,61 +1,66 @@
 import { decisionStream } from "@system-one/ai";
+import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, type BudgetInfo, type ModelInfo } from "../../web/lib/api.ts";
+import { Alert, AlertDescription } from "@/web/components/ui/alert";
+import { Card } from "@/web/components/ui/card";
+import { ToggleGroup, ToggleGroupItem } from "@/web/components/ui/toggle-group";
+import { type FrameInfo, GameFrame } from "../../web/components/GameFrame.tsx";
+import { ApiError, api, type ModelInfo } from "../../web/lib/api.ts";
+import { refreshBudget } from "../../web/lib/budget.ts";
+import { useSquareSide } from "../../web/lib/hooks.ts";
 import { Board } from "../../web/ui/Board.tsx";
+import { FullscreenButton } from "../../web/ui/FullscreenButton.tsx";
+import { logoImage, makerOf } from "../../web/ui/brands.ts";
 import { agentColors } from "../../web/ui/colors.ts";
-import { addCall, emptyStats, Hud, type RunStats, usd } from "../../web/ui/Hud.tsx";
+import { addCall, emptyStats, type RunStats, usd } from "../../web/ui/Hud.tsx";
+import { ModelName, splitLabel } from "../../web/ui/ModelName.tsx";
 import { ModelPicker } from "../../web/ui/ModelPicker.tsx";
 import { ProbabilityBars } from "../../web/ui/ProbabilityBars.tsx";
-import {
-  alive,
-  createMatch,
-  createRng,
-  endReason,
-  isOver,
-  type Match,
-  MAX_TICKS,
-  type Policy,
-  playTick,
-  type Rng,
-  STALEMATE_TURNS,
-  scores,
-  standings,
-  type Turn,
-} from "./engine.ts";
+import { ResultCard } from "../../web/ui/ResultCard.tsx";
+import { SetupPrompt } from "../../web/ui/SetupPrompt.tsx";
+import { FilterChips, useModelFilters } from "../../web/ui/RankingFilters.tsx";
+import { SetupRow } from "../../web/ui/SetupRow.tsx";
+import { Tip } from "../../web/ui/Tip.tsx";
+import { createRng, MAX_TICKS, type Policy, type Rng, START_HP, STALEMATE_TURNS } from "./engine.ts";
+import { type Field, type FieldAgent, type FieldId, type FieldMatch, type FieldTurn, fields } from "./fields.ts";
 import { type Clock, presets } from "./presets.ts";
-import { drawArena } from "./render.ts";
-import { questionsFor, stateFor } from "./state.ts";
 
 type Status = "setup" | "running" | "paused" | "over";
 /** One match. Stop or a new match aborts its open calls, and late answers are dropped. */
-type Run = { runId: string; rng: Rng; policy: Policy; clock: Clock; abort: AbortController };
+type Run = { runId: string; field: Field; rng: Rng; policy: Policy; clock: Clock; abort: AbortController };
 
 /** Lockstep waits this long between ticks, so people can follow the match. */
 const LOCKSTEP_PAUSE_MS = 400;
-/** Real-time: the engine ticks this often, and agents act when they have a new answer. 600 ticks = 60 s. */
-const REALTIME_TICK_MS = 100;
-const REALTIME_MAX_TICKS = 600;
+/** Real-time: a match lasts at most this long. Each field sets how often its engine ticks. */
+const REALTIME_SECONDS = 60;
+const realtimeMaxTicks = (field: Field) => Math.round((REALTIME_SECONDS * 1000) / field.realtimeTickMs);
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const isBudgetError = (e: unknown) => e instanceof ApiError && e.code === "budget_exceeded";
 
 /** `arg` is a preset id from the URL, for example #/arena/standoff. */
-export function Arena({ arg }: { arg?: string }) {
+export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [slots, setSlots] = useState<string[]>([]);
   const [policy, setPolicy] = useState<Policy>("sample");
   const [clock, setClock] = useState<Clock>("lockstep");
+  const [fieldId, setFieldId] = useState<FieldId>("ring");
+  const field = fields[fieldId];
+  // The ranking tab has its own filters. "" means all.
+  const [rankField, setRankField] = useState<FieldId>("ring");
+  const [rankClock, setRankClock] = useState("");
+  const [rankPolicy, setRankPolicy] = useState("");
+  const modelFilters = useModelFilters(models);
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1_000_000));
   const [stalemateTurns, setStalemateTurns] = useState(STALEMATE_TURNS);
-  const [match, setMatch] = useState<Match>();
+  const [match, setMatch] = useState<FieldMatch>();
   const [status, setStatus] = useState<Status>("setup");
   const [notice, setNotice] = useState<string>();
   const [stats, setStats] = useState<RunStats>(emptyStats);
-  const [budget, setBudget] = useState<BudgetInfo>();
   const [boardKey, setBoardKey] = useState(0);
 
   const run = useRef<Run | null>(null);
-  const matchRef = useRef<Match | undefined>(undefined);
+  const matchRef = useRef<FieldMatch | undefined>(undefined);
   const statusRef = useRef<Status>("setup");
   const statsRef = useRef<RunStats>(emptyStats);
   /** The run the lockstep loop (or a Step) is playing, so only one plays at a time. */
@@ -67,7 +72,6 @@ export function Arena({ arg }: { arg?: string }) {
       setModels(list);
       setSlots(list.slice(0, 3).map((m) => m.key));
     }, (e) => setNotice(message(e)));
-    api.budget().then(setBudget, () => {});
   }, []);
 
   const label = (key: string) => models.find((m) => m.key === key)?.label ?? key;
@@ -82,12 +86,41 @@ export function Arena({ arg }: { arg?: string }) {
     setStalemateTurns(preset.stalemateTurns);
   }, [preset, models]);
 
-  const labels = Object.fromEntries((match?.agents ?? []).map((a) => [a.id, label(a.model)]));
+  /** Before a match, the field shows the players to be. */
+  const previewMatch = () =>
+    slots.length >= 2 && slots.length <= 6 ? field.createMatch(slots, { stalemateTurns, maxTicks: clock === "realtime" ? realtimeMaxTicks(field) : MAX_TICKS }) : undefined;
+  // Draw on every animation frame: agents glide, shots fade. The view belongs to the field that made it.
+  const [arenaBox, arenaWidth] = useSquareSide<HTMLDivElement>();
+  const arenaSize = useRef(0);
+  arenaSize.current = arenaWidth;
+  const labels = useRef<Record<string, string>>({});
+  const logos = useRef<Record<string, HTMLImageElement | undefined>>({});
+  const onRing = match?.agents ?? previewMatch()?.agents ?? [];
+  labels.current = Object.fromEntries(onRing.map((a) => [a.id, splitLabel(label(a.model)).name]));
+  logos.current = Object.fromEntries(
+    onRing.map((a) => {
+      const maker = makerOf(splitLabel(label(a.model)).name);
+      return [a.id, maker && logoImage(maker.logo)];
+    }),
+  );
+  const view = useRef<{ field: Field; state: unknown } | null>(null);
+  const preview = useRef<{ field: Field; match: FieldMatch | undefined }>({ field, match: undefined });
+  preview.current = { field, match: match ? undefined : previewMatch() };
   useEffect(() => {
-    if (canvas.current && match) drawArena(canvas.current, match, labels);
-  });
+    let frame = 0;
+    const draw = (now: number) => {
+      frame = requestAnimationFrame(draw);
+      const m = matchRef.current ?? preview.current.match;
+      const f = matchRef.current && run.current ? run.current.field : preview.current.field;
+      if (!m || !canvas.current || arenaSize.current === 0) return;
+      if (view.current?.field !== f) view.current = { field: f, state: f.view() };
+      view.current.state = f.draw(canvas.current, m, view.current.state, labels.current, logos.current, now, arenaSize.current);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
-  const commit = (next: Match | undefined) => {
+  const commit = (next: FieldMatch | undefined) => {
     matchRef.current = next;
     setMatch(next);
   };
@@ -104,24 +137,25 @@ export function Arena({ arg }: { arg?: string }) {
     changeStatus("paused");
   };
 
-  async function finish(current: Run, final: Match) {
+  async function finish(current: Run, final: FieldMatch) {
     changeStatus("over");
     try {
-      await api.addScores(current.runId, scores(final));
+      await api.addScores(current.runId, current.field.scores(final));
       setBoardKey((k) => k + 1);
     } catch (e) {
       setNotice(`Could not save scores: ${message(e)}`);
     }
-    api.budget().then(setBudget, () => {});
+    refreshBudget();
   }
 
   /** Lockstep: every standing agent decides, then the tick resolves. Returns true when the loop should stop. */
   async function lockstepTick(current: Run): Promise<boolean> {
     const m = matchRef.current!;
-    const standing = alive(m);
+    const { field: f } = current;
+    const standing = f.alive(m);
     const settled = await Promise.allSettled(
       standing.map((agent) =>
-        api.decide(agent.model, current.runId, { state: stateFor(m, agent), questions: questionsFor(m, agent), signal: current.abort.signal }),
+        api.decide(agent.model, current.runId, { state: f.state(m, agent), questions: f.questions(m, agent), signal: current.abort.signal }),
       ),
     );
     // Stopped, or replaced by a new match, while the calls were open.
@@ -131,7 +165,7 @@ export function Arena({ arg }: { arg?: string }) {
       stopForBudget((overBudget as PromiseRejectedResult).reason);
       return true;
     }
-    const turns: Record<string, Turn> = {};
+    const turns: Record<string, FieldTurn> = {};
     standing.forEach((agent, i) => {
       const result = settled[i]!;
       if (result.status === "fulfilled") {
@@ -142,10 +176,10 @@ export function Arena({ arg }: { arg?: string }) {
         count("error");
       }
     });
-    const next = playTick(m, turns, current.policy, current.rng);
+    const next = f.playTick(m, turns, current.policy, current.rng);
     commit(next);
-    if (isOver(next)) await finish(current, next);
-    return isOver(next);
+    if (f.isOver(next)) await finish(current, next);
+    return f.isOver(next);
   }
 
   async function lockstepLoop(current: Run) {
@@ -161,12 +195,13 @@ export function Arena({ arg }: { arg?: string }) {
     }
   }
 
-  // Real-time: one decision stream per agent, and an engine tick every REALTIME_TICK_MS.
+  // Real-time: one decision stream per agent, and an engine tick every field.realtimeTickMs.
   useEffect(() => {
     const current = run.current;
     if (status !== "running" || current?.clock !== "realtime") return;
-    const pending: Record<string, Turn> = {};
-    const streams = alive(matchRef.current!).map((agent) =>
+    const { field: f } = current;
+    const pending: Record<string, FieldTurn> = {};
+    const streams = f.alive(matchRef.current!).map((agent) =>
       decisionStream({
         // With one call in flight, the next call starts within 20 ms of the last answer.
         everyMs: 20,
@@ -174,9 +209,9 @@ export function Arena({ arg }: { arg?: string }) {
         makeCall: () => {
           const m = matchRef.current!;
           const me = m.agents.find((a) => a.id === agent.id)!;
-          if (me.hp <= 0 || isOver(m)) return null;
+          if (me.hp <= 0 || f.isOver(m)) return null;
           // Built at call time, so a slow model acts on an older state.
-          return { state: stateFor(m, me), questions: questionsFor(m, me) };
+          return { state: f.state(m, me), questions: f.questions(m, me) };
         },
         decide: (call, signal) => api.decide(agent.model, current.runId, { ...call, signal }),
         onResult: (decision) => {
@@ -205,10 +240,10 @@ export function Arena({ arg }: { arg?: string }) {
       if (statusRef.current !== "running") return;
       const turns = { ...pending };
       for (const id of Object.keys(pending)) delete pending[id];
-      const next = playTick(matchRef.current!, turns, current.policy, current.rng);
+      const next = f.playTick(matchRef.current!, turns, current.policy, current.rng);
       commit(next);
-      if (isOver(next)) void finish(current, next);
-    }, REALTIME_TICK_MS);
+      if (f.isOver(next)) void finish(current, next);
+    }, f.realtimeTickMs);
     return () => {
       clearInterval(timer);
       for (const s of streams) s.stop();
@@ -220,14 +255,15 @@ export function Arena({ arg }: { arg?: string }) {
     run.current?.abort.abort();
     run.current = null;
     try {
-      const game = `arena-${clock}`;
-      const maxTicks = clock === "realtime" ? REALTIME_MAX_TICKS : MAX_TICKS;
-      const runId = await api.createRun(game, { models: slots, seed, policy, clock, maxTicks, stalemateTurns, preset: preset?.id ?? null });
-      const current: Run = { runId, rng: createRng(seed), policy, clock, abort: new AbortController() };
+      const game = `${field.game}-${clock}`;
+      const maxTicks = clock === "realtime" ? realtimeMaxTicks(field) : MAX_TICKS;
+      const runId = await api.createRun(game, { models: slots, field: fieldId, seed, policy, clock, maxTicks, stalemateTurns, preset: preset?.id ?? null });
+      const current: Run = { runId, field, rng: createRng(seed), policy, clock, abort: new AbortController() };
       run.current = current;
       statsRef.current = emptyStats;
       setStats(emptyStats);
-      commit(createMatch(slots, { maxTicks, stalemateTurns }));
+      view.current = null;
+      commit(field.createMatch(slots, { maxTicks, stalemateTurns }));
       changeStatus("running");
       if (clock === "lockstep") void lockstepLoop(current);
     } catch (e) {
@@ -261,165 +297,308 @@ export function Arena({ arg }: { arg?: string }) {
     setStats(emptyStats);
     changeStatus("setup");
     setNotice("Stopped. The match was not scored.");
-    api.budget().then(setBudget, () => {});
+    refreshBudget();
   }
 
-  const playing = status === "running" || status === "paused";
-  const game = `arena-${run.current?.clock ?? clock}`;
+  const agents = match?.agents ?? previewMatch()?.agents ?? [];
+  // The tooltip trigger replaces the item's data-state, so the selected style keys on aria-checked.
+  const onChip = "aria-checked:border-primary aria-checked:bg-primary aria-checked:text-primary-foreground aria-checked:hover:bg-primary/90 aria-checked:hover:text-primary-foreground";
+  const numberInput = "h-8 w-20 rounded-md border border-input bg-input/30 px-2 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+
+  const playField = run.current?.field ?? field;
+  const rankGames = (rankClock === "" ? ["lockstep", "realtime"] : [rankClock]).map((c) => `${fields[rankField].game}-${c}`);
+  const playClock = run.current?.clock ?? clock;
+  const subtitle = `${playField.name} · ${playClock === "lockstep" ? "Lockstep" : "Real-time"} · ${agents.length} players · ${status === "running" ? "playing" : status === "over" ? "match over" : status}`;
 
   return (
-    <section className="arena">
-      <div className="arena-setup card">
-        <div className="row">
-          <label>
-            Preset{" "}
-            <select
-              value={preset?.id ?? ""}
-              onChange={(e) => (window.location.hash = e.target.value ? `#/arena/${e.target.value}` : "#/arena")}
-              disabled={playing}
-            >
-              <option value="">custom</option>
-              {presets.map((p) => (
-                <option key={p.id} value={p.id} disabled={models.length > 0 && !hasModels(p.models)}>
-                  {p.name}: {p.models.length > 3 ? `${p.models.length} models` : p.models.map(label).join(" vs ")}
-                  {models.length > 0 && !hasModels(p.models) ? " (missing keys)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          {preset && (
-            <span className="muted">
-              {preset.clock === "realtime" ? "Real-time" : "Lockstep"}, {preset.policy === "top" ? "top answers" : "sampling"}. {preset.description}
-            </span>
-          )}
-        </div>
-        <ModelPicker models={models} value={slots} onChange={setSlots} min={2} max={6} needs={["text"]} />
-        <div className="row">
-          <label>
-            Clock{" "}
-            <select value={clock} onChange={(e) => setClock(e.target.value as Clock)} disabled={playing}>
-              <option value="lockstep">lockstep (fair turns)</option>
-              <option value="realtime">real-time (speed counts)</option>
-            </select>
-          </label>
-          <label>
-            Policy{" "}
-            <select value={policy} onChange={(e) => setPolicy(e.target.value as Policy)} disabled={playing}>
-              <option value="sample">sample from probabilities</option>
-              <option value="top">top answer</option>
-            </select>
-          </label>
-          <label>
-            Seed <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} disabled={playing} style={{ width: 100 }} />
-          </label>
-          <label title="The match ends in a draw when nobody fires for this many turns in a row. The models know the rule.">
-            Draw after{" "}
-            <input
-              type="number"
-              min={1}
-              value={stalemateTurns}
-              onChange={(e) => setStalemateTurns(Math.max(1, Number(e.target.value)))}
-              disabled={playing}
-              style={{ width: 60 }}
-            />{" "}
-            quiet turns
-          </label>
-        </div>
-        <div className="row">
-          <button type="button" onClick={start} disabled={status === "running" || slots.length < 2}>
-            {status === "setup" ? "Start" : "New match"}
-          </button>
-          {status === "running" && (
-            <button type="button" onClick={() => changeStatus("paused")}>
-              Pause
-            </button>
-          )}
-          {status === "paused" && (
+    <GameFrame
+      info={info}
+      controls={{
+        status,
+        startLabel: "Start match",
+        canStart: slots.length >= 2,
+        onStart: start,
+        onPause: () => changeStatus("paused"),
+        onResume: resume,
+        onStop: stop,
+        onSetup: () => {
+          commit(undefined);
+          changeStatus("setup");
+        },
+        onStep: playClock === "lockstep" ? step : undefined,
+      }}
+      stats={stats}
+      players={agents.map((agent) => ({ label: label(agent.model), color: agentColors[agent.id]! }))}
+      subtitle={subtitle}
+      progress={match ? { value: match.tick / match.maxTicks, left: `tick ${match.tick}`, right: `${match.maxTicks}` } : undefined}
+      board={
+        <Board
+          game={rankGames}
+          config={rankPolicy ? { policy: rankPolicy } : {}}
+          include={modelFilters.include}
+          toolbar={
             <>
-              <button type="button" onClick={resume}>
-                Resume
-              </button>
-              {run.current?.clock === "lockstep" && (
-                <button type="button" onClick={step}>
-                  Step
-                </button>
-              )}
+              <FilterChips label="Field" value={rankField} onChange={(v) => setRankField((v || "ring") as FieldId)} options={[{ value: "ring", label: "Ring" }, { value: "plane", label: "Plane" }]} />
+              <FilterChips label="Clock" value={rankClock} onChange={setRankClock} options={[{ value: "", label: "All" }, { value: "lockstep", label: "Lockstep" }, { value: "realtime", label: "Real-time" }]} />
+              <FilterChips label="Policy" value={rankPolicy} onChange={setRankPolicy} options={[{ value: "", label: "All" }, { value: "sample", label: "Sample" }, { value: "top", label: "Top answer" }]} />
+              {modelFilters.controls}
             </>
-          )}
-          {playing && (
-            <button type="button" onClick={stop}>
-              Stop
-            </button>
-          )}
-          <span className="muted">{match && status === "over" ? outcome(match) : status}</span>
-          {match && status !== "setup" && status !== "over" && match.quietTurns > 0 && (
-            <span className="muted">
-              quiet for {match.quietTurns} of {match.stalemateTurns} turns
-            </span>
-          )}
-        </div>
-        {notice && <p className="refused">{notice}</p>}
-        <Hud stats={stats} budget={budget} />
-      </div>
-
-      {match && (
-        <div className="arena-play">
-          <div>
-            <canvas ref={canvas} />
-            <ol className="events muted">
-              {match.events.slice(0, 8).map((e, i) => (
-                <li key={`${match.tick}-${i}`}>{e}</li>
-              ))}
-            </ol>
-          </div>
-          <div className="agent-cards">
-            {match.agents.map((agent) => (
-              <div className={agent.hp > 0 ? "card agent" : "card agent out"} key={agent.id}>
-                <div className="agent-head">
-                  <span className="swatch" style={{ background: agentColors[agent.id] }} />
-                  <strong>{agent.id}</strong>
-                  <span>{labels[agent.id]}</span>
-                  <span className="hp">{agent.hp > 0 ? "♥".repeat(agent.hp) : "out"}</span>
-                </div>
-                <ProbabilityBars title="move" answer={agent.lastAnswers?.move} />
-                <ProbabilityBars title="target" answer={agent.lastAnswers?.target} />
-                <ProbabilityBars title="fire" answer={agent.lastAnswers?.fire} />
-                <div className="muted small">
-                  {agent.calls} calls, {agent.calls > 0 ? Math.round(agent.latencyMs / agent.calls) : 0} ms, {usd(agent.costUsd)}, {agent.hits}/{agent.shots} hits
-                  {agent.refusals > 0 && `, ${agent.refusals} refusals`}
-                  {agent.errors > 0 && `, ${agent.errors} errors`}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+          }
+          models={models}
+          refreshKey={boardKey}
+          columns={[
+            { metric: "win", label: "Win rate", format: (n) => `${Math.round(n * 100)}%` },
+            { metric: "placement", label: "Mean place" },
+            { metric: "stalemate", label: "Draws", format: (n) => `${Math.round(n * 100)}%` },
+            { metric: "stay_rate", label: "Stays", format: (n) => `${Math.round(n * 100)}%` },
+            { metric: "survived_ticks", label: "Ticks alive", format: (n) => n.toFixed(0) },
+            { metric: "hits", label: "Hits", format: (n) => n.toFixed(1) },
+            ...(rankField === "plane" ? [{ metric: "accuracy", label: "Accuracy", format: (n: number) => `${Math.round(n * 100)}%` }] : []),
+            { metric: "actions", label: "Actions", format: (n) => n.toFixed(0) },
+            { metric: "latency_ms", label: "Latency", format: (n) => `${Math.round(n)} ms` },
+            { metric: "cost_usd", label: "Cost", format: usd },
+          ]}
+        />
+      }
+    >
+      {notice && (
+        <Alert data-chrome>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
       )}
 
-      <h3>Rankings ({game})</h3>
-      <Board
-        game={game}
-        models={models}
-        refreshKey={boardKey}
-        columns={[
-          { metric: "win", label: "Win rate", format: (n) => `${Math.round(n * 100)}%` },
-          { metric: "placement", label: "Mean place" },
-          { metric: "stalemate", label: "Draws", format: (n) => `${Math.round(n * 100)}%` },
-          { metric: "stay_rate", label: "Stays", format: (n) => `${Math.round(n * 100)}%` },
-          { metric: "survived_ticks", label: "Ticks alive", format: (n) => n.toFixed(0) },
-          { metric: "hits", label: "Hits", format: (n) => n.toFixed(1) },
-          { metric: "actions", label: "Actions", format: (n) => n.toFixed(0) },
-          { metric: "latency_ms", label: "Latency", format: (n) => `${Math.round(n)} ms` },
-          { metric: "cost_usd", label: "Cost", format: usd },
-        ]}
-      />
-    </section>
+      {status === "setup" && (
+        <Card data-chrome className="gap-4 px-5 py-4">
+          <SetupRow label="Describe">
+            <SetupPrompt
+              game="arena"
+              models={models}
+              usable={models.filter((m) => m.inputs.includes("text"))}
+              slots={slots}
+              min={2}
+              max={6}
+              placeholder="Try: all Jevs on a plane, or Luna against two Clefs in real-time"
+              choices={{
+                field: { question: "Which field?", options: { ring: "a ring: agents stand on a circle", plane: "a plane: a square field where shots fly" }, current: fieldId },
+                clock: {
+                  question: "Which clock?",
+                  options: { lockstep: "lockstep: fair turns, everyone waits", realtime: "real-time: fast models act more often" },
+                  current: clock,
+                },
+                policy: { question: "How do models act?", options: { sample: "sample from the probabilities", top: "always the most likely action" }, current: policy },
+              }}
+              onApply={(setup) => {
+                if (preset) window.location.hash = "#/arena";
+                setSlots(setup.slots);
+                setFieldId(setup.choices.field as FieldId);
+                setClock(setup.choices.clock as Clock);
+                setPolicy(setup.choices.policy as Policy);
+              }}
+            />
+          </SetupRow>
+          <SetupRow label="Preset">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={2}
+              className="flex-wrap"
+              value={preset?.id ?? ""}
+              onValueChange={(id) => (window.location.hash = id ? `#/arena/${id}` : "#/arena")}
+            >
+              {presets.map((p) => (
+                <Tip key={p.id} text={models.length > 0 && !hasModels(p.models) ? "Needs a model without a key here" : p.models.map(label).join(" vs ")}>
+                  <ToggleGroupItem value={p.id} className={onChip} disabled={models.length > 0 && !hasModels(p.models)}>
+                    {p.name}
+                  </ToggleGroupItem>
+                </Tip>
+              ))}
+            </ToggleGroup>
+            {preset && <p className="max-w-3xl text-sm text-muted-foreground">{preset.description}</p>}
+          </SetupRow>
+          <SetupRow label="Players">
+            <ModelPicker models={models} value={slots} onChange={setSlots} min={2} max={6} needs={["text"]} />
+          </SetupRow>
+          <SetupRow label="Rules">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
+              <ToggleGroup type="single" variant="outline" size="sm" value={fieldId} onValueChange={(v) => v && setFieldId(v as FieldId)}>
+                <Tip text="Agents stand on a ring and step along it. Shots hit at once, with a chance that drops with distance.">
+                  <ToggleGroupItem value="ring" className={onChip}>
+                    Ring
+                  </ToggleGroupItem>
+                </Tip>
+                <Tip text="A square field. Agents step in 12 directions, walls and other agents block them, and shots fly for a few ticks, so they can be dodged.">
+                  <ToggleGroupItem value="plane" className={onChip}>
+                    Plane
+                  </ToggleGroupItem>
+                </Tip>
+              </ToggleGroup>
+              <ToggleGroup type="single" variant="outline" size="sm" value={clock} onValueChange={(v) => v && setClock(v as Clock)}>
+                <Tip text="The server waits for every model, then the turn resolves. Fair turns.">
+                  <ToggleGroupItem value="lockstep" className={onChip}>
+                    Lockstep
+                  </ToggleGroupItem>
+                </Tip>
+                <Tip text="Each model acts when its answer lands. Speed counts.">
+                  <ToggleGroupItem value="realtime" className={onChip}>
+                    Real-time
+                  </ToggleGroupItem>
+                </Tip>
+              </ToggleGroup>
+              <ToggleGroup type="single" variant="outline" size="sm" value={policy} onValueChange={(v) => v && setPolicy(v as Policy)}>
+                <Tip text="Draw each action from the model's probabilities.">
+                  <ToggleGroupItem value="sample" className={onChip}>
+                    Sample
+                  </ToggleGroupItem>
+                </Tip>
+                <Tip text="Always take the most likely action.">
+                  <ToggleGroupItem value="top" className={onChip}>
+                    Top answer
+                  </ToggleGroupItem>
+                </Tip>
+              </ToggleGroup>
+              <Tip text="The seed for the random draws: who starts where, which shots hit, and the sampled actions.">
+                <label className="flex items-center gap-2">
+                  Seed
+                  <input type="number" className={numberInput} value={seed} onChange={(e) => setSeed(Number(e.target.value))} />
+                </label>
+              </Tip>
+              <Tip text="The match ends in a draw when nobody fires for this many turns in a row. The models know the rule.">
+                <label className="flex items-center gap-2">
+                  Draw after
+                  <input
+                    type="number"
+                    min={1}
+                    className={cn(numberInput, "w-14")}
+                    value={stalemateTurns}
+                    onChange={(e) => setStalemateTurns(Math.max(1, Number(e.target.value)))}
+                  />
+                  quiet turns
+                </label>
+              </Tip>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {fieldId === "ring" ? "On a ring: agents step along it, and shots land at once." : "On a plane: agents step in 12 directions, and shots take a few ticks to fly."}{" "}
+              {clock === "lockstep" ? "Lockstep: every model answers, then the turn resolves." : "Real-time: each model acts when its answer lands, so fast models act more often."}{" "}
+              {policy === "sample" ? "Actions are drawn from the probabilities." : "Each model does its most likely action."}
+            </p>
+          </SetupRow>
+        </Card>
+      )}
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
+        <div
+          ref={arenaBox}
+          className="relative aspect-square w-full shrink-0 overflow-hidden rounded-2xl border bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)] lg:w-[min(48%,calc(100vh-15.5rem))] lg:[html.stage_&]:w-[min(48%,calc(100vh-11.5rem))] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0"
+        >
+          <canvas ref={canvas} className="block" />
+          <FullscreenButton target={arenaBox} />
+          {match && match.events.length > 0 && (
+            <ol className="pointer-events-none absolute bottom-3 left-4 space-y-0.5 font-mono text-[11px]">
+              {match.events.slice(0, 3).map((event, i) => (
+                <li key={`${match.tick}-${i}`} style={{ opacity: 1 - i * 0.3 }}>
+                  <EventText text={event} />
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-3">
+          {status === "over" && match && <ArenaResult field={run.current?.field ?? field} match={match} label={label} />}
+          {agents.map((agent) => (
+            <PlayerCard key={agent.id} agent={agent} label={label(agent.model)} waiting={!match} />
+          ))}
+        </div>
+      </div>
+    </GameFrame>
   );
 }
 
-function outcome(match: Match): string {
-  const reason = endReason(match);
-  if (reason === "stalemate") return `over: draw, nobody fired for ${match.stalemateTurns} turns`;
-  const top = standings(match)[0]!;
-  if (top.hp <= 0) return "over: everyone is out";
-  return `over: ${top.id} ${reason === "time" ? "leads at the time limit" : "wins"}`;
+/** How the match ended, and the final standings. */
+function ArenaResult({ field, match, label }: { field: Field; match: FieldMatch; label: (key: string) => string }) {
+  const reason = field.endReason(match);
+  const ranked = field.standings(match);
+  const top = ranked[0]!;
+  const name = splitLabel(label(top.model)).name;
+  const draw = reason === "stalemate" || top.hp <= 0;
+  const title = draw ? "Draw" : reason === "time" ? `${name} leads` : `${name} wins`;
+  const detail =
+    reason === "stalemate"
+      ? `Nobody fired for ${match.stalemateTurns} turns in a row.`
+      : top.hp <= 0
+        ? "Everyone is out."
+        : reason === "time"
+          ? `Time is up after ${match.tick} ticks. ${name} has the most hit points left.`
+          : `Last model standing after ${match.tick} ticks.`;
+  return (
+    <ResultCard
+      title={title}
+      detail={detail}
+      color={draw ? undefined : agentColors[top.id]}
+      rows={ranked.map((agent, i) => ({
+        key: agent.id,
+        label: label(agent.model),
+        color: agentColors[agent.id]!,
+        place: i + 1,
+        out: agent.hp <= 0,
+        stats: [
+          agent.hp > 0 ? `${agent.hp} hp` : "out",
+          `${agent.hits}/${agent.shots} hits`,
+          `${agent.calls > 0 ? Math.round(agent.latencyMs / agent.calls) : 0} ms`,
+          usd(agent.costUsd),
+        ],
+      }))}
+    />
+  );
+}
+
+/** An event line, with each agent name in its color. */
+function EventText({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(" ").map((word, i) => (
+        <span key={i} style={agentColors[word] ? { color: agentColors[word], fontWeight: 600 } : { color: "rgba(255,255,255,0.75)" }}>
+          {i > 0 && " "}
+          {word}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** One player: its color, its hit points, and what it wants to do. */
+function PlayerCard({ agent, label, waiting }: { agent: FieldAgent; label: string; waiting: boolean }) {
+  const color = agentColors[agent.id]!;
+  const out = agent.hp <= 0;
+  return (
+    <Card className={cn("relative gap-3 overflow-hidden py-3 pr-4 pl-5 transition-opacity", out && "opacity-45")}>
+      <span className="absolute inset-y-0 left-0 w-1" style={{ background: color, boxShadow: `0 0 12px ${color}` }} />
+      <div className="flex items-center gap-3">
+        <ModelName label={label} />
+        <span className="ml-auto flex items-center gap-1">
+          {out ? (
+            <span className="caps text-muted-foreground">out</span>
+          ) : (
+            Array.from({ length: START_HP }, (_, i) => (
+              <span key={i} className="size-2 rounded-full" style={{ background: i < agent.hp ? color : "rgba(255,255,255,0.15)" }} />
+            ))
+          )}
+        </span>
+      </div>
+      {!waiting && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3 sm:gap-5">
+            <ProbabilityBars title="move" answer={agent.lastAnswers?.move} color={color} limit={3} minRows={3} />
+            <ProbabilityBars title="aim at" answer={agent.lastAnswers?.target} color={color} limit={3} minRows={3} />
+            <ProbabilityBars title="fire" answer={agent.lastAnswers?.fire} color={color} minRows={3} />
+          </div>
+          <div className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
+            {agent.calls} calls · {agent.calls > 0 ? Math.round(agent.latencyMs / agent.calls) : 0} ms · {usd(agent.costUsd)} · {agent.hits}/{agent.shots} hits
+            {agent.refusals > 0 && ` · ${agent.refusals} refusals`}
+            {agent.errors > 0 && ` · ${agent.errors} errors`}
+          </div>
+        </>
+      )}
+    </Card>
+  );
 }

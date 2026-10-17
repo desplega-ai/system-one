@@ -24,6 +24,9 @@ const ZOOM_CELLS = 3;
 export type Mode = "still" | "live";
 export type Move = "deeper" | "out" | "stop" | "stay";
 export const interestLevels = ["boring", "mild", "interesting", "fascinating"] as const;
+export type InterestLevel = (typeof interestLevels)[number];
+/** One emoji per interest level, for the cards, the picture and the ranking. */
+export const reactions: Record<InterestLevel, string> = { boring: "😐", mild: "🙂", interesting: "😮", fascinating: "🤩" };
 
 /** One answered turn, as the judge sees it again in its memory. */
 export type Step = {
@@ -35,6 +38,8 @@ export type Step = {
   move: Move;
   /** 0 (boring) to 3 (fascinating), probability-weighted. Null when refused. */
   interest: number | null;
+  /** The level the judge picked (its top answer): the reaction the page shows. Null when refused. */
+  reaction: InterestLevel | null;
   /** The probability of the top cell: how sure the judge was. */
   topProbability: number | null;
 };
@@ -205,6 +210,7 @@ export function applyTurn(judge: Judge, turn: Turn, sourcePx: number, mode: Mode
     focus,
     move: chosen,
     interest: interest.type === "refusal" ? null : interest.score,
+    reaction: interest.type === "refusal" ? null : (interest.level as InterestLevel),
     topProbability,
   };
   const next = { ...judge, focus };
@@ -276,6 +282,10 @@ export function scores(game: Game): { model: string; metric: string; value: numb
       cost_usd: j.costUsd,
       errors: j.errors,
       refusals: j.refusals,
+      // The share of looks with each reaction, so sessions of any length compare.
+      ...Object.fromEntries(
+        interestLevels.map((level) => [`reaction_${level}`, j.steps.length > 0 ? j.steps.filter((s) => s.reaction === level).length / j.steps.length : 0]),
+      ),
     }).map(([metric, value]) => ({ model: j.model, metric, value }));
   });
 }

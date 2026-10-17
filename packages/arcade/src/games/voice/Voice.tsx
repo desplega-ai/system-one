@@ -11,6 +11,7 @@ import { type Action, actionsFrom, cleanValue, fillPrompt, NONE, uncertain } fro
 import { createMission, type Grade, grade, type Mission } from "./missions.ts";
 import { type Heard, pickQuestion, questionsFor, stateFor, type VoiceAnswers } from "./state.ts";
 import { useAcme } from "./useAcme.ts";
+import "./voice.css";
 
 type Via = "audio" | "transcript";
 type Listener = { model: string; via: Via };

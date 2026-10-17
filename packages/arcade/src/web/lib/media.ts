@@ -39,7 +39,8 @@ export function drawView(ctx: CanvasRenderingContext2D, src: Source, view: View,
   const square = squareOf(src);
   const size = view.size * square.side;
   const sy = square.y + view.y * square.side;
-  if (!(src instanceof HTMLVideoElement)) {
+  // Only the webcam (a live stream) is mirrored. A picture or a video file plays as it is.
+  if (!(src instanceof HTMLVideoElement) || src.srcObject === null) {
     ctx.drawImage(src, square.x + view.x * square.side, sy, size, size, dx, dy, side, side);
     return;
   }

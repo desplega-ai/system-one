@@ -1,0 +1,185 @@
+/* The Voice page is hidden for now and keeps its first look: a light panel inside the dark site.
+   Every rule is under .voice, because CSS imported from TSX applies to the whole site. */
+.voice {
+  --v-fg: #1c1c1a;
+  --v-muted: #77756f;
+  --v-line: #e2e0da;
+  --v-card: #ffffff;
+  --v-accent: #2f6fde;
+  --v-bad: #c23b22;
+  display: block;
+  padding: 16px;
+  border-radius: 12px;
+  background: #fafaf8;
+  color: var(--v-fg);
+  font-size: 15px;
+}
+
+.voice h3 {
+  font-size: 1.17em;
+  font-weight: 700;
+  margin: 1em 0;
+}
+
+.voice button,
+.voice select,
+.voice input {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid var(--v-line);
+  border-radius: 6px;
+  background: var(--v-card);
+  color: var(--v-fg);
+}
+
+.voice button:not(:disabled) {
+  cursor: pointer;
+}
+
+.voice button:disabled {
+  opacity: 0.5;
+}
+
+.voice .muted {
+  color: var(--v-muted);
+}
+
+.voice .small {
+  font-size: 12px;
+}
+
+.voice .refused {
+  color: var(--v-bad);
+}
+
+.voice .card {
+  background: var(--v-card);
+  border: 1px solid var(--v-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.voice .row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.voice .game-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.voice .picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.voice .picker-slot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice .picker-label {
+  width: 80px;
+}
+
+.voice .board {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.voice .board th,
+.voice .board td {
+  text-align: left;
+  padding: 4px 12px 4px 0;
+  border-bottom: 1px solid var(--v-line);
+}
+
+.voice .voice-play {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.voice .clips {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 420px;
+}
+
+.voice .mission {
+  width: 340px;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+
+.voice .acme-frame {
+  display: block;
+  width: 340px;
+  height: 600px;
+  border: 0;
+  border-radius: 32px;
+}
+
+.voice .voice-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 340px;
+  box-sizing: border-box;
+  padding: 6px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.voice .voice-status .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b5b2aa;
+}
+
+.voice .voice-status .dot.listening {
+  background: #2e9e5b;
+}
+
+.voice .voice-status .dot.thinking {
+  background: #d6a21e;
+}
+
+.voice .voice-status .dot.speaking {
+  background: var(--v-accent);
+}
+
+.voice .voice-status .meter {
+  margin-left: auto;
+  width: 80px;
+  height: 5px;
+  background: var(--v-line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.voice .voice-status .meter span {
+  display: block;
+  height: 100%;
+  background: #2e9e5b;
+}
+
+.voice .voice-question {
+  width: 340px;
+  box-sizing: border-box;
+  margin-top: 8px;
+  font-weight: 600;
+  border: 2px solid var(--v-accent);
+}

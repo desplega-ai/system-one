@@ -63,7 +63,11 @@ export const api = {
 
   addScores: (runId: string, scores: Score[]) => request<{ added: number }>(`/api/runs/${runId}/scores`, { scores }),
 
-  rankings: (game: string) => request<RankingRow[]>(`/api/rankings?game=${encodeURIComponent(game)}`),
+  /** Rankings over one or more games. `config` keeps only runs whose config has these values. */
+  rankings: (games: string | string[], config: Record<string, string> = {}) =>
+    request<RankingRow[]>(
+      `/api/rankings?${new URLSearchParams({ game: [games].flat().join(","), ...Object.fromEntries(Object.entries(config).map(([k, v]) => [`config.${k}`, v])) })}`,
+    ),
 
   budget: () => request<BudgetInfo>("/api/budget"),
 };

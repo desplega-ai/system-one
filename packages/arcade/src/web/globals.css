@@ -1,0 +1,100 @@
+/* The arcade's one stylesheet: Tailwind, the shadcn tokens, and a dark "broadcast" theme.
+   The UI stays neutral. The agent colors (ui/colors.ts) are the only strong colors. */
+@import "tailwindcss" source("..");
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-live: var(--live);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+/* Always dark: index.html puts the class on <html>. */
+.dark {
+  --radius: 0.75rem;
+  --background: oklch(0.13 0.008 265);
+  --foreground: oklch(0.97 0.003 265);
+  --card: oklch(0.17 0.008 265);
+  --card-foreground: oklch(0.97 0.003 265);
+  --popover: oklch(0.19 0.008 265);
+  --popover-foreground: oklch(0.97 0.003 265);
+  --primary: oklch(0.97 0.003 265);
+  --primary-foreground: oklch(0.17 0.008 265);
+  --secondary: oklch(0.23 0.008 265);
+  --secondary-foreground: oklch(0.97 0.003 265);
+  --muted: oklch(0.22 0.008 265);
+  --muted-foreground: oklch(0.68 0.015 265);
+  --accent: oklch(0.25 0.008 265);
+  --accent-foreground: oklch(0.97 0.003 265);
+  --destructive: oklch(0.66 0.2 25);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.6 0.01 265);
+  --live: oklch(0.64 0.24 27);
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  /* Tailwind 4 gives buttons the default cursor. Every control here should show the hand. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  label:has(input),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Small uppercase labels, as on a broadcast overlay. */
+@utility caps {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The faint 9x9-style grid behind the home hero. */
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 5%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 5%) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* Stage mode (F, or the Focus button) hides everything that is not the game. */
+html.stage [data-chrome] {
+  display: none;
+}

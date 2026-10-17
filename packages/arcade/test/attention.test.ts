@@ -112,7 +112,7 @@ describe("applyTurn", () => {
     expect(j.trail).toEqual(["E5"]);
     expect(j.focus).toBe("E5");
     expect(j.heat?.view).toEqual(fullView);
-    expect(j.steps).toEqual([{ at: "", depth: 0, focus: "E5", move: "deeper", interest: 2, topProbability: 0.8 }]);
+    expect(j.steps).toEqual([{ at: "", depth: 0, focus: "E5", move: "deeper", interest: 2, reaction: "interesting", topProbability: 0.8 }]);
     expect(j.calls).toBe(1);
     expect(j.latencyMs).toBe(300);
     expect(j.costUsd).toBe(0.0001);
@@ -151,7 +151,7 @@ describe("applyTurn", () => {
     expect(j.focus).toBe("E5");
     expect(j.trail).toEqual(["E5"]);
     expect(j.refusals).toBe(3);
-    expect(j.steps.at(-1)).toEqual({ at: "E5", depth: 1, focus: "E5", move: "stay", interest: null, topProbability: null });
+    expect(j.steps.at(-1)).toEqual({ at: "E5", depth: 1, focus: "E5", move: "stay", interest: null, reaction: null, topProbability: null });
   });
 
   test("3 errors in a row stop the judge, and an answer resets the count", () => {
@@ -226,6 +226,11 @@ describe("game", () => {
       cost_usd: 0.0003,
       errors: 0,
       refusals: 0,
+      // The helper always answers the level "interesting".
+      reaction_boring: 0,
+      reaction_mild: 0,
+      reaction_interesting: 1,
+      reaction_fascinating: 0,
     });
   });
 });

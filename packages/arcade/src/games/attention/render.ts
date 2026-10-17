@@ -2,7 +2,7 @@
 // zoomed view with the heatmap of its last answer.
 import { cells, drawView, fullView, GRID, type Source, type View } from "../../web/lib/media.ts";
 import { agentColors } from "../../web/ui/colors.ts";
-import { cellView, currentView, earlierViews, type Judge, type Mode } from "./engine.ts";
+import { cellView, currentView, earlierViews, type Judge, type Mode, reactions } from "./engine.ts";
 
 /** What the screen shows for a judge. It glides toward the judge's real view and focus. */
 export type Shown = { view: View; focus: View | null };
@@ -49,16 +49,27 @@ export function drawPicture(canvas: HTMLCanvasElement, src: Source, judges: read
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
     // Inset a little per judge, so views on the same spot (like the whole picture) stay visible.
-    const inset = 1.5 + i * 3;
+    const inset = 2 + i * 4;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
     ctx.lineWidth = 3;
     ctx.strokeRect(s.view.x * size + inset, s.view.y * size + inset, s.view.size * size - 2 * inset, s.view.size * size - 2 * inset);
     if (s.focus) {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.3;
       ctx.fillStyle = color;
       ctx.fillRect(s.focus.x * size, s.focus.y * size, s.focus.size * size, s.focus.size * size);
       ctx.globalAlpha = 1;
       ctx.lineWidth = 2;
       ctx.strokeRect(s.focus.x * size, s.focus.y * size, s.focus.size * size, s.focus.size * size);
+    }
+    ctx.shadowBlur = 0;
+    // The judge's last reaction, in the corner of its view.
+    const reaction = judge.steps.at(-1)?.reaction;
+    if (reaction) {
+      ctx.font = "20px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      ctx.fillText(reactions[reaction], Math.min(size - 4, (s.view.x + s.view.size) * size - inset - 4), Math.max(4, s.view.y * size + inset + 4));
     }
   });
 }
@@ -71,15 +82,17 @@ export function drawZoom(canvas: HTMLCanvasElement, src: Source, judge: Judge, s
   drawView(ctx, src, view, 0, 0, size);
   const toCanvas = (r: View) => [((r.x - view.x) / view.size) * size, ((r.y - view.y) / view.size) * size, (r.size / view.size) * size] as const;
 
-  ctx.strokeStyle = "rgba(255,255,255,0.3)";
+  // The grid the model answered on: the view itself in still mode, the whole frame in live mode.
+  const grid = judge.heat?.view ?? view;
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 1; i < GRID; i++) {
-    const p = (i * size) / GRID;
-    ctx.moveTo(p, 0);
-    ctx.lineTo(p, size);
-    ctx.moveTo(0, p);
-    ctx.lineTo(size, p);
+    const [x, y] = toCanvas({ x: grid.x + (i * grid.size) / GRID, y: grid.y + (i * grid.size) / GRID, size: 0 });
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, size);
+    ctx.moveTo(0, y);
+    ctx.lineTo(size, y);
   }
   ctx.stroke();
 
@@ -90,7 +103,7 @@ export function drawZoom(canvas: HTMLCanvasElement, src: Source, judge: Judge, s
     judge.heat.probabilities.forEach((p, i) => {
       if (max <= 0 || p / max < 0.02) return;
       const [x, y, side] = toCanvas(cellView(judge.heat!.view, cells[i]!));
-      ctx.globalAlpha = 0.6 * (p / max);
+      ctx.globalAlpha = 0.45 * (p / max);
       ctx.fillRect(x, y, side, side);
     });
     ctx.globalAlpha = 1;

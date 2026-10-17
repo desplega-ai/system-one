@@ -1,4 +1,4 @@
-// Browser hooks for live input: a decision stream, the webcam and a hands-free mic.
+// Browser hooks: a decision stream, the webcam, a hands-free mic, and element sizes.
 import { type AudioPart, audio, type DecisionStreamOptions, decisionStream } from "@system-one/ai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createVad, encodeWav, FRAME_MS, SAMPLE_RATE, type Vad } from "./voice.ts";
@@ -199,4 +199,33 @@ export function useVoiceClips({ onClip, paused }: { onClip: (clip: AudioPart, du
 
   useEffect(() => stop, [stop]);
   return { start, stop, status, error, level };
+}
+
+/** The width of an element in CSS pixels. CSS sets the size, and canvases read it to draw sharp. */
+export function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry!.contentRect.width)));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
+/** The side of the largest square that fits the element, in CSS pixels. Square boxes give their width;
+ * a box in full screen gives its height. */
+export function useSquareSide<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [side, setSide] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setSide(Math.round(Math.min(entry!.contentRect.width, entry!.contentRect.height))));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, side] as const;
 }

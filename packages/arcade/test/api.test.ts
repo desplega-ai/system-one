@@ -108,6 +108,15 @@ describe("runs, scores and rankings", () => {
     expect(await (await get("/api/rankings", "?game=arena-lockstep")).json()).toEqual([{ model: "fake:ok", metric: "win", rows: 1, mean: 1, sum: 1 }]);
   });
 
+  test("rankings take several games and config filters", async () => {
+    const { post, get } = setup();
+    const { id } = await (await post("/api/runs", { game: "arena-lockstep", config: { policy: "top" } })).json();
+    await post("/api/runs/:id/scores", { scores: [{ model: "fake:ok", metric: "win", value: 1 }] }, { id });
+    expect(await (await get("/api/rankings", "?game=arena-lockstep,arena-realtime&config.policy=top")).json()).toHaveLength(1);
+    expect(await (await get("/api/rankings", "?game=arena-lockstep&config.policy=sample")).json()).toEqual([]);
+    expect((await get("/api/rankings", "?game=arena-lockstep&config.bad-key=1")).status).toBe(400);
+  });
+
   test("rejects a bad game name, bad scores and an unknown run", async () => {
     const { post, runId } = setup();
     expect((await post("/api/runs", { game: "Bad Name" })).status).toBe(400);
