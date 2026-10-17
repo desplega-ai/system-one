@@ -88,6 +88,7 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
   const insertRun = db.query("INSERT INTO runs (id, game, created_at, config, visitor) VALUES ($id, $game, $createdAt, $config, $visitor)");
   const selectRun = db.query<{ id: string; visitor: string | null }, { id: string }>("SELECT id, visitor FROM runs WHERE id = $id");
   const selectScored = db.query<{ n: number }, { runId: string }>("SELECT COUNT(*) AS n FROM scores WHERE run_id = $runId");
+  const selectPlayed = db.query<{ model: string }, { runId: string }>("SELECT DISTINCT model FROM calls WHERE run_id = $runId");
   const insertCall = db.query(`INSERT INTO calls
     (id, run_id, kind, provider, model, started_at, latency_ms, input_tokens, output_tokens, cost_usd, cost_source, input, output, error_code, visitor, ip_hash)
     VALUES ($id, $runId, $kind, $provider, $model, $startedAt, $latencyMs, $inputTokens, $outputTokens, $costUsd, $costSource, $input, $output, $errorCode, $visitor, $ipHash)`);
@@ -121,6 +122,11 @@ export function openStore(path = process.env.SYSTEM_ONE_DB ?? "data/arcade.sqlit
 
     hasScores(runId: string): boolean {
       return (selectScored.get({ runId })?.n ?? 0) > 0;
+    },
+
+    /** The models that made at least one call in the run, failed calls included (a model that only failed still played). */
+    playedIn(runId: string): Set<string> {
+      return new Set(selectPlayed.all({ runId }).map((r) => r.model));
     },
 
     /** Today's spend of one visitor, and of one IP hash. */

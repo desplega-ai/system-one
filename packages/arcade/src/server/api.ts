@@ -77,6 +77,15 @@ export class HttpError extends Error {
 type Deps = { store: Store; models: readonly ModelEntry[]; budget: Budget; transcriber?: Transcriber; generator?: Generator };
 
 const idPattern = /^[a-z0-9-]{1,40}$/;
+
+/**
+ * Public mode (a share per visitor) also limits bursts. Without them, a visitor could open many calls at
+ * once: each passes the share check before any of them is paid. A webcam session has 3 calls open, a
+ * real-time arena up to 6.
+ */
+const MAX_OPEN_CALLS = { visitor: 8, ip: 16 };
+/** New runs per IP and window, so nobody can fill the database with empty runs. */
+const MAX_RUNS = { count: 60, windowMs: 10 * 60_000 };
 const metricPattern = /^[a-z0-9_]{1,40}$/;
 
 export function createApi({ store, models, budget, transcriber = gatewayTranscriber, generator = gatewayGenerator }: Deps) {
@@ -91,6 +100,33 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
     if (!entry) throw new HttpError(400, "unknown_model", `model must be one of: ${[...modelsByKey.keys()].join(", ")}`);
     return entry;
   };
+  const publicMode = budget.visitorUsd !== undefined || budget.ipUsd !== undefined;
+  const open = new Map<string, number>();
+  /** Takes a slot for one model call, or throws 429. Returns the function that frees it. */
+  const takeSlot = (who: Who): (() => void) => {
+    if (!publicMode) return () => {};
+    const keys = [`v:${who.visitor}`, `i:${who.ipHash}`] as const;
+    if ((open.get(keys[0]) ?? 0) >= MAX_OPEN_CALLS.visitor || (open.get(keys[1]) ?? 0) >= MAX_OPEN_CALLS.ip) {
+      throw new HttpError(429, "too_many_calls", "too many calls at once, wait for the open ones");
+    }
+    for (const key of keys) open.set(key, (open.get(key) ?? 0) + 1);
+    return () => {
+      for (const key of keys) {
+        const n = (open.get(key) ?? 1) - 1;
+        if (n <= 0) open.delete(key);
+        else open.set(key, n);
+      }
+    };
+  };
+  const runTimes = new Map<string, number[]>();
+  const requireRunQuota = (who: Who) => {
+    if (!publicMode) return;
+    const now = Date.now();
+    const recent = (runTimes.get(who.ipHash) ?? []).filter((t) => now - t < MAX_RUNS.windowMs);
+    if (recent.length >= MAX_RUNS.count) throw new HttpError(429, "too_many_runs", "too many new games, wait a few minutes");
+    runTimes.set(who.ipHash, [...recent, now]);
+  };
+
   const requireBudget = (provider: string, who: Who) => {
     const reason = overBudget(budget, store.spendToday(), provider);
     if (reason) throw new HttpError(429, "budget_exceeded", reason);
@@ -108,6 +144,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         const { game, config = {} } = await body(req);
         if (typeof game !== "string" || !idPattern.test(game)) throw new HttpError(400, "invalid_input", "game must match [a-z0-9-]{1,40}");
         if (JSON.stringify(config).length > 10_000) throw new HttpError(400, "invalid_input", "config is larger than 10,000 characters");
+        requireRunQuota(who);
         return { id: store.createRun(game, config as JsonValue, who.visitor) };
       }),
     },
@@ -128,6 +165,10 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
           }
           return { model, metric, value };
         });
+        // Only models that answered in this run can have scores. The voice game scores "<key> (transcript)".
+        const played = store.playedIn(runId);
+        const unplayed = rows.find((r) => !played.has(r.model.replace(/ \(transcript\)$/, "")));
+        if (unplayed) throw new HttpError(400, "unplayed_model", `${unplayed.model} made no call in this run`);
         store.addScores(runId, rows);
         return { added: rows.length };
       }),
@@ -143,6 +184,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
           if (!entry.inputs.includes(input)) throw new HttpError(400, "unsupported_input", `${entry.key} does not take ${input} input`);
         }
         requireBudget(entry.model.provider, who);
+        const free = takeSlot(who);
 
         const startedAt = new Date();
         const t0 = performance.now();
@@ -155,6 +197,8 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         } catch (error) {
           store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: usageOf(error), output: null, errorCode: errorCodeOf(error) });
           throw error;
+        } finally {
+          free();
         }
       }),
     },
@@ -166,6 +210,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         if (typeof json.audio !== "string") throw new HttpError(400, "invalid_input", "audio must be a data URL");
         const clip = audio(json.audio);
         requireBudget("gateway", who);
+        const free = takeSlot(who);
 
         const startedAt = new Date();
         const t0 = performance.now();
@@ -178,6 +223,8 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         } catch (error) {
           store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
           throw new HttpError(502, "transcription_failed", error instanceof Error ? error.message : String(error));
+        } finally {
+          free();
         }
       }),
     },
@@ -191,6 +238,7 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
           throw new HttpError(400, "invalid_input", "prompt must be a string of 1 to 4,000 characters, and system at most 2,000");
         }
         requireBudget("gateway", who);
+        const free = takeSlot(who);
 
         const startedAt = new Date();
         const t0 = performance.now();
@@ -203,6 +251,8 @@ export function createApi({ store, models, budget, transcriber = gatewayTranscri
         } catch (error) {
           store.recordCall({ ...record, latencyMs: performance.now() - t0, usage: undefined, output: null, errorCode: errorCodeOf(error) });
           throw new HttpError(502, "generation_failed", error instanceof Error ? error.message : String(error));
+        } finally {
+          free();
         }
       }),
     },
@@ -251,11 +301,24 @@ function whoOf(req: Request): Who {
   const visitor = new RegExp(`(?:^|;\\s*)${VISITOR_COOKIE}=([0-9a-f-]{36})(?:;|$)`).exec(req.headers.get("cookie") ?? "")?.[1];
   // Fly sets Fly-Client-IP. Behind another proxy, the first X-Forwarded-For address.
   const ip = req.headers.get("fly-client-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
-  const ipHash = new Bun.CryptoHasher("sha256").update(`${salt}:${ip}`).digest("hex").slice(0, 24);
+  const ipHash = new Bun.CryptoHasher("sha256").update(`${salt}:${networkOf(ip)}`).digest("hex").slice(0, 24);
   return visitor ? { visitor, ipHash, isNew: false } : { visitor: crypto.randomUUID(), ipHash, isNew: true };
 }
 
 const whoFields = (who: Who) => ({ visitor: who.visitor, ipHash: who.ipHash });
+
+/** An IPv4 address as it is. An IPv6 address as its /64 network: one home or phone gets a whole /64. */
+export function networkOf(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const [head = "", tail = ""] = ip.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = ip.includes("::") ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.toLowerCase().replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
+}
 
 /** Wraps a handler: its return value becomes JSON, and errors become JSON errors with a status. A new visitor gets its cookie. */
 function route(handler: (req: Request, who: Who) => unknown) {

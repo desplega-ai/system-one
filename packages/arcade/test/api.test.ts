@@ -29,6 +29,7 @@ function setup({ budget = { dailyUsd: 1, providers: {} }, transcriber, generator
   const models = [
     entry("fake:ok", fakeModel("fake")),
     entry("fake:vision", fakeModel("fake"), ["text", "image"]),
+    entry("fake:slow", { ...fakeModel("fake"), decide: async (c) => (await Bun.sleep(20), fakeModel("fake").decide(c)) }),
     entry("fake:down", fakeModel("down", () => { throw new DecisionError("http", "down", "503 overloaded", { status: 503 }); })),
     entry("fake:odd", fakeModel("odd", () => { throw new DecisionError("bad_response", "odd", "no answer", { usage }); })),
   ];
@@ -107,6 +108,18 @@ describe("/api/decide", () => {
     expect((await post("/api/decide", { runId, model: "fake:ok", call }, {}, { cookie: "s1v=00000000-0000-4000-8000-000000000000" })).status).toBe(200);
   });
 
+  test("public mode limits open calls per visitor", async () => {
+    const { post, runId } = setup({ budget: { dailyUsd: 1, providers: {}, visitorUsd: 1 } });
+    // One visitor: the same cookie on every call (the calls start before the first response sets one).
+    const me = { cookie: "s1v=11111111-1111-4111-8111-111111111111" };
+    const results = await Promise.all(Array.from({ length: 12 }, () => post("/api/decide", { runId, model: "fake:slow", call }, {}, me)));
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(8);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(4);
+    // The slots free up when the calls end.
+    expect((await post("/api/decide", { runId, model: "fake:ok", call }, {}, me)).status).toBe(200);
+  });
+
   test("returns 502 for a provider error and stores the failed call with its usage", async () => {
     const { post, store, runId } = setup();
     const down = await post("/api/decide", { runId, model: "fake:down", call });
@@ -119,10 +132,17 @@ describe("/api/decide", () => {
   });
 });
 
+/** Creates a run in which fake:ok answered once, so the run can take scores for it. */
+async function playedRun(post: ReturnType<typeof setup>["post"], game = "arena-lockstep", config: object = {}) {
+  const { id } = await (await post("/api/runs", { game, config })).json();
+  await post("/api/decide", { runId: id, model: "fake:ok", call });
+  return id as string;
+}
+
 describe("runs, scores and rankings", () => {
   test("creates a run, adds scores and ranks models", async () => {
     const { post, get } = setup();
-    const { id } = await (await post("/api/runs", { game: "arena-lockstep", config: { seed: 7 } })).json();
+    const id = await playedRun(post, "arena-lockstep", { seed: 7 });
     const added = await post("/api/runs/:id/scores", { scores: [{ model: "fake:ok", metric: "win", value: 1 }] }, { id });
     expect(await added.json()).toEqual({ added: 1 });
     expect(await (await get("/api/rankings", "?game=arena-lockstep")).json()).toEqual([{ model: "fake:ok", metric: "win", rows: 1, mean: 1, sum: 1 }]);
@@ -130,7 +150,7 @@ describe("runs, scores and rankings", () => {
 
   test("rankings take several games and config filters", async () => {
     const { post, get } = setup();
-    const { id } = await (await post("/api/runs", { game: "arena-lockstep", config: { policy: "top" } })).json();
+    const id = await playedRun(post, "arena-lockstep", { policy: "top" });
     await post("/api/runs/:id/scores", { scores: [{ model: "fake:ok", metric: "win", value: 1 }] }, { id });
     expect(await (await get("/api/rankings", "?game=arena-lockstep,arena-realtime&config.policy=top")).json()).toHaveLength(1);
     expect(await (await get("/api/rankings", "?game=arena-lockstep&config.policy=sample")).json()).toEqual([]);
@@ -139,8 +159,10 @@ describe("runs, scores and rankings", () => {
 
   test("a run takes scores once, and only from the visitor that made it", async () => {
     const { post } = setup();
-    const { id } = await (await post("/api/runs", { game: "arena-lockstep", config: {} })).json();
+    const id = await playedRun(post);
     const scores = { scores: [{ model: "fake:ok", metric: "win", value: 1 }] };
+    // A model that made no call in the run cannot have a score.
+    expect((await post("/api/runs/:id/scores", { scores: [{ model: "fake:vision", metric: "win", value: 1 }] }, { id })).status).toBe(400);
     expect((await post("/api/runs/:id/scores", scores, { id }, { cookie: "s1v=00000000-0000-4000-8000-000000000000" })).status).toBe(403);
     expect((await post("/api/runs/:id/scores", scores, { id })).status).toBe(200);
     expect((await post("/api/runs/:id/scores", scores, { id })).status).toBe(409);
@@ -201,4 +223,14 @@ describe("/api/generate", () => {
 test("/api/budget shows the caps and today's spend", async () => {
   const { get } = setup();
   expect(await (await get("/api/budget")).json()).toEqual({ dailyUsd: 1, providers: {}, spent: { total: 0, byProvider: {} } });
+});
+
+describe("networkOf", () => {
+  test("keeps IPv4 and groups IPv6 by /64", async () => {
+    const { networkOf } = await import("../src/server/api.ts");
+    expect(networkOf("203.0.113.7")).toBe("203.0.113.7");
+    expect(networkOf("2a09:8280:1:0:abcd::1")).toBe("2a09:8280:1:0::/64");
+    expect(networkOf("2a09:8280:0001:0000:ffff:1:2:3")).toBe("2a09:8280:1:0::/64");
+    expect(networkOf("2a09::1")).toBe("2a09:0:0:0::/64");
+  });
 });
