@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { Badge } from "@/web/components/ui/badge";
 import { Button } from "@/web/components/ui/button";
 import type { GameInfo } from "../App.tsx";
+import { GitHubMark, repoUrl } from "../components/GitHub.tsx";
 import { ArenaPreview, AttentionPreview } from "./Previews.tsx";
 
 const previews: Record<string, ComponentType> = { arena: ArenaPreview, attention: AttentionPreview };
@@ -79,14 +80,19 @@ export function Home({ games }: { games: GameInfo[] }) {
         </ol>
       </section>
 
-      <footer className="mt-16 border-t pt-6 text-sm text-muted-foreground">
-        Made with 💜 by{" "}
-        <a href="https://tarasyarema.com" target="_blank" rel="noreferrer" className="text-foreground underline-offset-4 hover:underline">
-          taras
-        </a>{" "}
-        from{" "}
-        <a href="https://desplega.sh" target="_blank" rel="noreferrer" className="text-foreground underline-offset-4 hover:underline">
-          desplega labs
+      <footer className="mt-16 flex flex-wrap items-center justify-between gap-3 border-t pt-6 text-sm text-muted-foreground">
+        <span>
+          Made with 💜 by{" "}
+          <a href="https://tarasyarema.com" target="_blank" rel="noreferrer" className="text-foreground underline-offset-4 hover:underline">
+            taras
+          </a>{" "}
+          from{" "}
+          <a href="https://desplega.sh" target="_blank" rel="noreferrer" className="text-foreground underline-offset-4 hover:underline">
+            desplega labs
+          </a>
+        </span>
+        <a href={repoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-foreground underline-offset-4 hover:underline">
+          <GitHubMark className="size-4" /> Source on GitHub
         </a>
       </footer>
     </div>

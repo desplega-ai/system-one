@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/web/components/ui/tooltip";
 import type { BudgetInfo } from "../lib/api.ts";
 import { useBudget } from "../lib/budget.ts";
+import { GitHubMark, repoUrl } from "./GitHub.tsx";
 import { Logo } from "./Logo.tsx";
 
 export type NavLink = { path: string; title: string; icon: ComponentType<{ className?: string }> };
@@ -42,6 +43,14 @@ export function TopBar({ links, active }: { links: NavLink[]; active?: string })
             <ChartColumn className="size-4" />
             <span className="hidden sm:inline">Stats</span>
           </a>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <a href={repoUrl} target="_blank" rel="noreferrer" className={cn(linkClass(false), "px-2 sm:px-2")} aria-label="Source on GitHub">
+                <GitHubMark className="size-4" />
+              </a>
+            </TooltipTrigger>
+            <TooltipContent>Source on GitHub</TooltipContent>
+          </Tooltip>
           {budget && <BudgetMeter budget={budget} />}
         </div>
       </div>
