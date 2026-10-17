@@ -86,6 +86,16 @@ describe("openrouter", () => {
     });
   });
 
+  test("a reported $0 for a call with tokens takes the list price, unless the model has none", async () => {
+    fakeFetch({ ...systemOneReply, usage: { input_tokens: 300, output_tokens: 20, cost: 0 } });
+    const luna = await openrouter("openai/gpt-6-luna-decisions", { apiKey: "k" }).decide({ state: "text", questions });
+    // 300 tokens at the GPT-6 Luna list price of $0.10 per 1M.
+    expect(luna.usage).toMatchObject({ inputTokens: 300, costSource: "list-price" });
+    expect(luna.usage.costUsd).toBeCloseTo(0.00003, 12);
+    const unpriced = await openrouter("liquid/d1", { apiKey: "k" }).decide({ state: "text", questions });
+    expect(unpriced.usage).toMatchObject({ costUsd: 0, costSource: "provider" });
+  });
+
   test("leaves out noul criteria when none are given", async () => {
     const calls = fakeFetch({ model: "m", answers: { ok: { type: "noul", noul: 0.2 } } });
     await openrouter("liquid/d1", { apiKey: "k" }).decide({ state: "text", questions: { ok: q.boolean("ok?") } });

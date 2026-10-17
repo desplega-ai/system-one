@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { callToJson, DecisionError, type DecisionModel, image, q } from "@system-one/ai";
 import type { BunRequest } from "bun";
 import { createApi, type Generator, type Transcriber } from "../src/server/api.ts";
@@ -32,6 +32,8 @@ function setup({ budget = { dailyUsd: 1, providers: {} }, transcriber, generator
     entry("fake:slow", { ...fakeModel("fake"), decide: async (c) => (await Bun.sleep(20), fakeModel("fake").decide(c)) }),
     entry("fake:down", fakeModel("down", () => { throw new DecisionError("http", "down", "503 overloaded", { status: 503 }); })),
     entry("fake:odd", fakeModel("odd", () => { throw new DecisionError("bad_response", "odd", "no answer", { usage }); })),
+    // What fetch throws when the page stops the request.
+    entry("fake:stopped", fakeModel("fake", () => { throw new DOMException("The connection was closed.", "AbortError"); })),
   ];
   const api = createApi({ store, models, budget, transcriber, generator });
   // One browser: the first response sets the visitor cookie, and later requests send it back.
@@ -129,6 +131,20 @@ describe("/api/decide", () => {
     expect(odd.status).toBe(502);
     // The bad_response call was billed, so its cost counts.
     expect(store.spendToday().byProvider).toEqual({ down: 0, odd: 0.00003 });
+  });
+
+  test("a call that the page stopped is stored as aborted, and is not logged as a server error", async () => {
+    const { post, store, runId } = setup();
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await post("/api/decide", { runId, model: "fake:stopped", call });
+      expect(res.status).toBe(499);
+      expect((await res.json()).error.code).toBe("aborted");
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
+    expect(store.recentCalls(1)).toMatchObject([{ model: "fake:stopped", error: "aborted" }]);
   });
 });
 

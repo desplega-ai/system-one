@@ -408,6 +408,7 @@ async function respond(req: Request, who: Who, handler: (req: Request, who: Who)
   try {
     return Response.json(await handler(req, who));
   } catch (error) {
+    // "aborted": the page stopped the request (a newer turn replaced it), so nobody reads this answer.
     const [status, code] =
       error instanceof HttpError
         ? [error.status, error.code]
@@ -415,7 +416,9 @@ async function respond(req: Request, who: Who, handler: (req: Request, who: Who)
           ? [400, "invalid_input"]
           : error instanceof DecisionError
             ? [502, error.code]
-            : [500, "internal"];
+            : errorCodeOf(error) === "aborted"
+              ? [499, "aborted"]
+              : [500, "internal"];
     if (status === 500) console.error(error);
     const message = error instanceof Error ? error.message : String(error);
     return Response.json({ error: { code, message } }, { status });

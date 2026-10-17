@@ -50,7 +50,7 @@ usage.costSource; // "provider" | "list-price" | undefined
 
 Every provider returns the same `DecisionModel`, so you can swap the model and keep the call. Failures throw `DecisionError` with `code` set to `http`, `missing_credentials` or `bad_response`. On `bad_response` the provider answered and billed the call, so `error.details.usage` holds its usage.
 
-Cost: OpenRouter and AI Gateway report it (`costSource: "provider"`). OpenAI, Cloudflare and TypeSafe report only tokens, so the cost comes from the list prices in `packages/ai/src/pricing.ts` (`costSource: "list-price"`). Those estimates leave out the Cloudflare free tier and OpenAI regional or long-context premiums. A model with no list price gets `costUsd: undefined`.
+Cost: OpenRouter and AI Gateway report it (`costSource: "provider"`). OpenAI, Cloudflare and TypeSafe report only tokens, so the cost comes from the list prices in `packages/ai/src/pricing.ts` (`costSource: "list-price"`). A reported $0 for a call with input tokens also takes the list price (OpenRouter reports $0 for GPT-6 Luna), so the budget does not count a paid call as free. Those estimates leave out the Cloudflare free tier and OpenAI regional or long-context premiums. A model with no list price gets `costUsd: undefined`.
 
 | Provider | Factory | Env | Images | Status |
 | --- | --- | --- | --- | --- |
@@ -228,7 +228,7 @@ The arcade runs on Fly as `system-one-arcade` in the `desplega` org: one machine
 
 ```sh
 fly apps create system-one-arcade --org desplega
-fly volumes create arcade_data --app system-one-arcade --region iad --size 1 --yes
+fly volumes create arcade_data --app system-one-arcade --region iad --size 3 --yes   # about 4 KB per call
 fly secrets import --app system-one-arcade --stage < .env          # the provider keys
 echo "SYSTEM_ONE_SALT=$(openssl rand -hex 16)" | fly secrets import --app system-one-arcade --stage
 fly deploy                                                          # later deploys: only this
