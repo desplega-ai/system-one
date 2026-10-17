@@ -1,6 +1,7 @@
 // Home page previews: the real game renderers, played by fake answers. They make no API calls, so each
 // preview carries a "simulated" badge: the logos show who could play, not what they did.
 import type { Usage } from "@system-one/ai";
+import { cn } from "cn";
 import { useEffect, useRef } from "react";
 import { createMatch, createRng, isOver, type Match, playTick, type Turn as ArenaTurn } from "../../games/arena/engine.ts";
 import { drawArena, emptyShown, glide as glideArena } from "../../games/arena/render.ts";
@@ -57,8 +58,9 @@ const players = [
 ];
 const ids = ["red", "blue", "green", "yellow"];
 
-/** Four agents on the ring at real-time speed: a turn every 250 ms, and a new match 1.5 s after one ends. */
-export function ArenaPreview() {
+/** Four agents on the ring at real-time speed: a turn every 250 ms, and a new match 1.5 s after one ends.
+ * The box is 16:10 with the ring as tall as the box, or a square (`square`, for the share image) as wide as the ring. */
+export function ArenaPreview({ square = false }: { square?: boolean }) {
   const [box, width] = useElementWidth<HTMLDivElement>();
   const canvas = useRef<HTMLCanvasElement>(null);
   const state = useRef({ match: undefined as Match | undefined, shown: emptyShown(), next: 0, rng: createRng(7) });
@@ -89,7 +91,7 @@ export function ArenaPreview() {
       }
       s.next = now + (isOver(s.match) ? 1500 : 250);
     }
-    const size = Math.round((width * 10) / 16);
+    const size = square ? width : Math.round((width * 10) / 16);
     if (!canvas.current || size === 0) return;
     s.shown = glideArena(s.shown, s.match, now);
     const labels = Object.fromEntries(ids.map((id, i) => [id, players[i]!.name]));
@@ -98,7 +100,16 @@ export function ArenaPreview() {
   });
 
   return (
-    <div ref={box} className="relative flex aspect-[16/10] items-center justify-center bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)]">
+    <div
+      ref={box}
+      className={cn(
+        "relative flex items-center justify-center",
+        // The square fades into the page around it. The 16:10 box is a dark panel inside its card.
+        square
+          ? "aspect-square bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),transparent_70%)]"
+          : "aspect-[16/10] bg-[radial-gradient(circle_at_center,oklch(0.19_0.01_265),oklch(0.12_0.008_265)_70%)]",
+      )}
+    >
       <canvas ref={canvas} />
       <Simulated />
     </div>

@@ -13,7 +13,15 @@ const budget = parseBudget(process.env.SYSTEM_ONE_BUDGET);
 const server = Bun.serve({
   port: Number(process.env.PORT ?? 3300),
   // /acme is the mock shop page that the voice game drives through its tools.
-  routes: { "/": index, "/acme": acme, ...createApi({ store: openStore(), models, budget }) },
+  routes: {
+    "/": index,
+    "/acme": acme,
+    // The link preview image. Kept in memory, with an ETag, so crawlers get a 304 on a repeat visit.
+    "/og.png": new Response(await Bun.file(`${import.meta.dir}/../web/og.png`).bytes(), {
+      headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
+    }),
+    ...createApi({ store: openStore(), models, budget }),
+  },
   development: !production && { hmr: true, console: true },
   // Large enough for 8 webcam frames or a 60 s WAV clip, small enough to keep one call cheap.
   maxRequestBodySize: 4 * 1024 * 1024,

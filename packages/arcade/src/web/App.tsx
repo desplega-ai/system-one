@@ -7,6 +7,7 @@ import { Voice } from "../games/voice/Voice.tsx";
 import type { FrameInfo } from "./components/GameFrame.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Home } from "./home/Home.tsx";
+import { ShareCard } from "./home/ShareCard.tsx";
 import { StageContext } from "./lib/stage.ts";
 
 /** `arg` is the rest of the route: "standoff" for #/arena/standoff. */
@@ -97,6 +98,8 @@ export function App() {
   useEffect(() => {
     document.title = game ? `${game.title} · System One Arcade` : "System One Arcade";
   }, [game]);
+  // #/share is the link preview image, without the site around it.
+  if (path === "share") return <ShareCard />;
   return (
     <TooltipProvider delayDuration={200}>
       <StageContext value={{ stage, toggle: toggleStage }}>

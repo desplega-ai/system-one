@@ -164,6 +164,7 @@ A probe on 2026-10-16 found that every model can name the cell of a red dot on t
 - **Stack:** React 19, Tailwind 4 through `bun-plugin-tailwind` (set in `bunfig.toml` at the repo root, so `bun run dev`, `bun run start` and Docker all use it), shadcn components in `packages/arcade/src/web/components/ui/` (add more with `cd packages/arcade && bunx shadcn@latest add <name>`), Lucide icons, and the Geist fonts. The provider logos in `src/web/logos/` come from LobeHub's static icon set (MIT), and TypeSafe's from its site.
 - **Player bar:** the controls sit at the bottom of every game page. Keys: Space start, pause or resume. S stop. N next turn while paused. E edit the setup after a game. F focus mode. G and R switch the Game and Ranking tabs.
 - **Setup in words:** in the Arena, "Describe" takes a sentence ("all Jevs on a plane, real-time"). Jev reads it with one decision call (about 250 ms and $0.0001): how the models are picked, the count, each player, and the game's options, each with a "not said" answer. Logic and tests: `src/web/lib/setup.ts`, `test/setup.test.ts`.
+- **Link previews:** `src/web/index.html` has the Open Graph tags, with absolute URLs to `https://system-one-arcade.fly.dev`. The server serves the image at `/og.png`. To make a new one, open `#/share` in a 1200x630 window, take a screenshot, and save it as `src/web/og.png`. X and Slack keep the old image for some days, so also change the `og:image` URL (for example add `?v=2`).
 
 ### Recording a clip
 
@@ -215,7 +216,7 @@ Close agent-browser first (`agent-browser close`): `--args` applies only when it
 
 ### Deploy (Fly.io)
 
-The arcade runs on Fly as `system-one-arcade` in the `desplega` org: one machine in `iad` (Ashburn), close to the US model APIs, with SQLite on the `arcade_data` volume. `fly.toml` sets the budget for a public site.
+The arcade runs on Fly as `system-one-arcade` in the `desplega` org: one machine in `iad` (Ashburn), close to the US model APIs, with SQLite on the `arcade_data` volume. `fly.toml` sets the budget for a public site. To change the daily cap (for example for a launch day), edit `SYSTEM_ONE_BUDGET` there and run `fly deploy`.
 
 ```sh
 fly apps create system-one-arcade --org desplega
