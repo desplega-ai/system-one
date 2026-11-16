@@ -20,7 +20,23 @@ const providers: { name: string; ready: boolean; models: () => DecisionModel[] }
   {
     name: "openrouter",
     ready: has("OPENROUTER_API_KEY"),
-    models: () => [openrouter("~typesafe/jev-latest"), openrouter("cloudflare/clef-flash"), openrouter("openai/gpt-6-luna-decisions")],
+    models: () => [
+      openrouter("~typesafe/jev-latest"),
+      openrouter("cloudflare/clef-flash"),
+      openrouter("openai/gpt-6-luna-decisions"),
+      openrouter("~perplexity/pplx-decider-latest"),
+      openrouter("~perplexity/pplx-decider-flash-latest"),
+      openrouter("perplexity/pplx-decider-v1.3:free"),
+      openrouter("perplexity/pplx-decider-flash-v1.3:free"),
+      openrouter("liquid/d1.1"),
+      openrouter("liquid/d1-ultra"),
+      openrouter("google/gemini-decision-1"),
+      openrouter("morph/reflex"),
+      openrouter("baseten/joey-1"),
+      openrouter("baseten/elephant-1"),
+      openrouter("baseten/mammoth-1"),
+      openrouter("respan/span-02"),
+    ],
   },
   { name: "openai", ready: has("OPENAI_API_KEY"), models: () => [openai("gpt-6-luna")] },
   {
@@ -31,7 +47,14 @@ const providers: { name: string; ready: boolean; models: () => DecisionModel[] }
   {
     name: "gateway",
     ready: has("AI_GATEWAY_API_KEY"),
-    models: () => [gateway("typesafe-ai/jev-1.14.0"), gateway("openai/gpt-6-luna-decisions")],
+    models: () => [
+      gateway("typesafe-ai/jev-1.14.0"),
+      gateway("openai/gpt-6-luna-decisions"),
+      gateway("perplexity/pplx-decider-v1.3"),
+      gateway("perplexity/pplx-decider-flash-v1.3"),
+      gateway("google/gemini-decision-1"),
+      gateway("nace-ai/drex-max-v1.1"),
+    ],
   },
   { name: "typesafe", ready: has("TYPESAFE_API_KEY"), models: () => [typesafe("jev-latest")] },
 ];
@@ -72,8 +95,8 @@ for (const provider of providers) {
   for (const model of provider.models()) {
     const label = `${provider.name} ${model.modelId}`;
     try {
-      const t = await model.decide(textCall);
-      const i = await model.decide(imageCall);
+      const t = await model.decide({ ...textCall, signal: AbortSignal.timeout(30_000) });
+      const i = await model.decide({ ...imageCall, signal: AbortSignal.timeout(30_000) });
       const { triesDoor, mood, danger } = t.answers;
       const { square, color } = i.answers;
       totalUsd += (t.usage.costUsd ?? 0) + (i.usage.costUsd ?? 0);

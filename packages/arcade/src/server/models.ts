@@ -39,6 +39,18 @@ export const registry: readonly ModelEntry[] = [
     env: openrouterEnv,
     model: openrouter("openai/gpt-6-luna-decisions"),
   },
+  { key: "openrouter:decider-latest", label: "Decider (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("~perplexity/pplx-decider-latest") },
+  { key: "openrouter:decider-flash-latest", label: "Decider Flash (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("~perplexity/pplx-decider-flash-latest") },
+  { key: "openrouter:decider-v1.3-free", label: "Decider 1.3 Free (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("perplexity/pplx-decider-v1.3:free") },
+  { key: "openrouter:decider-flash-v1.3-free", label: "Decider Flash 1.3 Free (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("perplexity/pplx-decider-flash-v1.3:free") },
+  { key: "openrouter:liquid-d1.1", label: "Liquid d1.1 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("liquid/d1.1") },
+  { key: "openrouter:liquid-d1-ultra", label: "Liquid d1 Ultra (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("liquid/d1-ultra") },
+  { key: "openrouter:gemini-decision-1", label: "Gemini Decision 1 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("google/gemini-decision-1") },
+  { key: "openrouter:reflex", label: "Reflex (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("morph/reflex") },
+  { key: "openrouter:joey-1", label: "Joey 1 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("baseten/joey-1") },
+  { key: "openrouter:elephant-1", label: "Elephant 1 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("baseten/elephant-1") },
+  { key: "openrouter:mammoth-1", label: "Mammoth 1 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("baseten/mammoth-1") },
+  { key: "openrouter:span-02", label: "Span-02 (OpenRouter)", inputs: vision, env: openrouterEnv, model: openrouter("respan/span-02") },
   { key: "gateway:jev-1.14.0", label: "Jev 1.14 (AI Gateway)", inputs: vision, env: gatewayEnv, model: gateway("typesafe-ai/jev-1.14.0") },
   {
     key: "gateway:gpt-6-luna",
@@ -47,6 +59,10 @@ export const registry: readonly ModelEntry[] = [
     env: gatewayEnv,
     model: gateway("openai/gpt-6-luna-decisions"),
   },
+  { key: "gateway:decider-v1.3", label: "Decider 1.3 (AI Gateway)", inputs: vision, env: gatewayEnv, model: gateway("perplexity/pplx-decider-v1.3") },
+  { key: "gateway:decider-flash-v1.3", label: "Decider Flash 1.3 (AI Gateway)", inputs: vision, env: gatewayEnv, model: gateway("perplexity/pplx-decider-flash-v1.3") },
+  { key: "gateway:gemini-decision-1", label: "Gemini Decision 1 (AI Gateway)", inputs: vision, env: gatewayEnv, model: gateway("google/gemini-decision-1") },
+  { key: "gateway:drex-max-v1.1", label: "Drex Max 1.1 (AI Gateway)", inputs: vision, env: gatewayEnv, model: gateway("nace-ai/drex-max-v1.1") },
 ];
 
 /** The registry entries whose credentials are set. */

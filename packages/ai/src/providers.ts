@@ -20,7 +20,7 @@ export type ProviderOptions = {
   headers?: Record<string, string>;
 };
 
-/** OpenRouter Decisions API: 25 decision models from many makers, most with image input. */
+/** OpenRouter Decisions API: decision models from many makers, most with image input. */
 export function openrouter(modelId: OpenRouterDecisionModel, options: ProviderOptions = {}): DecisionModel {
   const provider = "openrouter";
   return httpModel({

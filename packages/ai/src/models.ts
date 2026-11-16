@@ -1,4 +1,4 @@
-// Known decision model ids per provider, checked 2026-10-16. Other strings are accepted too.
+// Known decision model ids per provider. Additions checked 2026-11-16. Other strings are accepted too.
 
 /** From `GET https://openrouter.ai/api/v1/models?output_modalities=decisions`. */
 export type OpenRouterDecisionModel =
@@ -11,9 +11,18 @@ export type OpenRouterDecisionModel =
   | "cloudflare/clef-omni"
   | "openai/gpt-6-luna-decisions"
   | "~perplexity/pplx-decider-latest"
+  | "~perplexity/pplx-decider-flash-latest"
+  | "perplexity/pplx-decider-v1.3:free"
+  | "perplexity/pplx-decider-flash-v1.3:free"
   | "perplexity/pplx-decider-v1.1-27b"
   | "liquid/d1"
+  | "liquid/d1.1"
   | "liquid/d1-ultra"
+  | "google/gemini-decision-1"
+  | "morph/reflex"
+  | "baseten/joey-1"
+  | "baseten/elephant-1"
+  | "baseten/mammoth-1"
   | "inception/mercury-decide"
   | "inception/mercury-decide:free"
   | "respan/span-02"
@@ -49,6 +58,10 @@ export type GatewayDecisionModel =
   | "liquid/d1"
   | "liquid/d1-ultra"
   | "perplexity/pplx-decider-v1.1-27b"
+  | "perplexity/pplx-decider-v1.3"
+  | "perplexity/pplx-decider-flash-v1.3"
+  | "google/gemini-decision-1"
+  | "nace-ai/drex-max-v1.1"
   | "openai/gpt-6-luna-decisions"
   // Text only
   | "typesafe-ai/jev"

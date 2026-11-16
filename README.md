@@ -109,6 +109,27 @@ Games run in the browser and call the server. The server holds the keys, checks 
 
 Errors are `{error: {code, message}}`: 400 for bad input, 429 `budget_exceeded`, 502 for a provider error.
 
+The arcade registry contains 26 models. Each model needs its provider's credentials before it appears in the model picker.
+These options join the existing Jev, Clef, and GPT-6 Luna models:
+
+| Model family | OpenRouter | AI Gateway |
+| --- | --- | --- |
+| Perplexity Decider | Latest, Flash Latest, 1.3 Free, Flash 1.3 Free | 1.3, Flash 1.3 |
+| Liquid | d1.1, d1 Ultra | |
+| Google | Gemini Decision 1 | Gemini Decision 1 |
+| Morph | Reflex | |
+| Baseten | Joey 1, Elephant 1, Mammoth 1 | |
+| Respan | Span-02 | |
+| Nace AI | | Drex Max 1.1 |
+
+These entries accept text and images through the existing adapters. Each entry includes a price for budget tracking.
+The free Decider entries have a zero token price and provider rate limits.
+Model IDs, inputs, and prices were checked on 2026-11-16 against the
+[OpenRouter catalog](https://openrouter.ai/api/v1/models?output_modalities=decisions) and
+[AI Gateway catalog](https://ai-gateway.vercel.sh/v1/models).
+Run `bun run smoke` to check text and image decisions with the configured credentials.
+The Liquid entries on AI Gateway rejected image calls during verification, so the arcade uses OpenRouter for Liquid.
+
 The database has 3 tables: `runs`, `calls` (every decide, transcribe and generate call, with tokens, cost, latency and error code) and `scores` (one row per agent and metric). Images and audio are stored only as a sha256 hash and a size.
 
 Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429 (`budget_exceeded`), and the game pauses.
