@@ -10,4 +10,14 @@ export const agentColors: Record<string, string> = {
 };
 
 /** The color of player slot `i`, in the same order as the player ids. */
-export const slotColor = (i: number) => Object.values(agentColors)[i % 6]!;
+export function slotColor(i: number): string {
+  const known = Object.values(agentColors)[i];
+  if (known) return known;
+  const hue = ((i * 137.508) % 360) / 60;
+  const chroma = 0.665;
+  const x = chroma * (1 - Math.abs((hue % 2) - 1));
+  const rgb = [[chroma, x, 0], [x, chroma, 0], [0, chroma, x], [0, x, chroma], [x, 0, chroma], [chroma, 0, x]][Math.floor(hue)]!;
+  return `#${rgb.map((value) => Math.round((value + 0.285) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+export const agentColor = (id: string): string => agentColors[id] ?? slotColor(Number(id.slice("player".length)) - 1);

@@ -1,6 +1,6 @@
 // Plane rules. Pure: the same match, turns and random numbers give the same result.
 import type { Usage } from "@system-one/ai";
-import { colors, type EndReason, MAX_TICKS, type Policy, type Rng, STALEMATE_TURNS, START_HP } from "../arena/engine.ts";
+import { type EndReason, MAX_TICKS, playerId, type Policy, type Rng, STALEMATE_TURNS, START_HP } from "../arena/engine.ts";
 import type { PlaneAnswers } from "./state.ts";
 
 export { colors, createRng, type EndReason, type Policy, type Rng, STALEMATE_TURNS, START_HP } from "../arena/engine.ts";
@@ -78,13 +78,13 @@ export function createMatch(
   models: readonly string[],
   { maxTicks = MAX_TICKS, stalemateTurns = STALEMATE_TURNS }: { maxTicks?: number; stalemateTurns?: number } = {},
 ): Match {
-  if (models.length < 2 || models.length > colors.length) throw new RangeError(`the plane takes 2 to ${colors.length} agents`);
+  if (models.length < 2) throw new RangeError("The plane needs at least 2 agents.");
   const agents = models.map((model, i): Agent => {
     const angle = (i * 2 * Math.PI) / models.length;
     const x = SIZE / 2 + 7 * Math.sin(angle);
     const y = SIZE / 2 - 7 * Math.cos(angle);
     return {
-      id: colors[i]!, model, x, y, from: { x, y }, hp: START_HP, diedAt: null, lastAnswers: null,
+      id: playerId(i), model, x, y, from: { x, y }, hp: START_HP, diedAt: null, lastAnswers: null,
       actions: 0, calls: 0, errors: 0, refusals: 0, shots: 0, hits: 0, stays: 0, blocked: 0, latencyMs: 0, costUsd: 0,
     };
   });

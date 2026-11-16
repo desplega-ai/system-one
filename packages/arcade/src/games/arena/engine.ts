@@ -9,6 +9,7 @@ export const MAX_TICKS = 100;
 /** Quiet turns in a row (nobody fires) before the match ends in a draw. */
 export const STALEMATE_TURNS = 10;
 export const colors = ["red", "blue", "green", "yellow", "purple", "orange"] as const;
+export const playerId = (index: number): string => colors[index] ?? `player${index + 1}`;
 
 export type Move = "clockwise" | "stay" | "counterclockwise";
 export type Policy = "sample" | "top";
@@ -74,10 +75,10 @@ export function createMatch(
   models: readonly string[],
   { maxTicks = MAX_TICKS, stalemateTurns = STALEMATE_TURNS }: { maxTicks?: number; stalemateTurns?: number } = {},
 ): Match {
-  if (models.length < 2 || models.length > colors.length) throw new RangeError(`the arena takes 2 to ${colors.length} agents`);
+  if (models.length < 2) throw new RangeError("The arena needs at least 2 agents.");
   const agents = models.map(
     (model, i): Agent => ({
-      id: colors[i]!,
+      id: playerId(i),
       model,
       angle: (i * 360) / models.length,
       hp: START_HP,

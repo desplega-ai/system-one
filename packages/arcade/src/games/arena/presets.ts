@@ -11,7 +11,7 @@ export type Preset = {
   name: string;
   /** What to watch for. "Seen" notes come from real matches. */
   description: string;
-  models: string[];
+  models: string[] | "all";
   field: FieldId;
   clock: Clock;
   policy: Policy;
@@ -21,6 +21,30 @@ export type Preset = {
 
 /** Together they cover both fields, both clocks and both policies. */
 export const presets: Preset[] = [
+  {
+    id: "all-vs-all",
+    emoji: "🌍",
+    name: "All vs all",
+    description: "Every configured model option in one ring match, including the same model through different hosts. Everyone gets one decision per turn.",
+    models: "all",
+    field: "ring",
+    clock: "lockstep",
+    policy: "sample",
+    seed: 26,
+    stalemateTurns: STALEMATE_TURNS,
+  },
+  {
+    id: "all-vs-all-plane",
+    emoji: "🌐",
+    name: "All vs all, plane",
+    description: "Every configured model option in one plane match. Everyone gets one decision per turn, then shots and moves resolve together.",
+    models: "all",
+    field: "plane",
+    clock: "lockstep",
+    policy: "sample",
+    seed: 27,
+    stalemateTurns: STALEMATE_TURNS,
+  },
   {
     id: "standoff",
     emoji: "🤠",
@@ -161,3 +185,6 @@ export const presets: Preset[] = [
     stalemateTurns: STALEMATE_TURNS,
   },
 ];
+
+export const modelsForPreset = (preset: Preset, available: readonly string[]): string[] =>
+  preset.models === "all" ? [...available] : preset.models;

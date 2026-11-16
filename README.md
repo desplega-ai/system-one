@@ -130,13 +130,16 @@ Model IDs, inputs, and prices were checked on 2026-11-16 against the
 Run `bun run smoke` to check text and image decisions with the configured credentials.
 The Liquid entries on AI Gateway rejected image calls during verification, so the arcade uses OpenRouter for Liquid.
 
+Every registered model has a maker logo beside its name. The smaller host logo identifies the provider.
+The new logos use the existing LobeHub icon set and the official Respan and Nace AI site icons.
+
 The database has 3 tables: `runs`, `calls` (every decide, transcribe and generate call, with tokens, cost, latency and error code) and `scores` (one row per agent and metric). Images and audio are stored only as a sha256 hash and a size.
 
 Budget: `SYSTEM_ONE_BUDGET='{"dailyUsd":1,"providers":{"openai":0.25}}'` caps the spend per UTC day, in total and per provider. The default is `{"dailyUsd":1}`. A call over a cap fails with 429 (`budget_exceeded`), and the game pauses.
 
 A public site also caps each visitor: `"visitorUsd":0.2` per visitor cookie (`s1v`, made on the first API call) and `"ipUsd":0.3` per IP address, so clearing the cookie does not reset the share. Over a share, a call fails with 429 `share_exceeded`, and the page says to come back tomorrow. The database keeps a salted hash of the IP (`SYSTEM_ONE_SALT`), not the address. A run takes scores once, and only from the visitor that created it.
 
-Arena: 2 to 6 models on a field. Each turn every model answers `move`, `target` and `fire`. Two fields:
+Arena: two or more models on a field. Each turn every model answers `move`, `target` and `fire`. Two fields:
 
 - **Ring** (`arena-*` rankings): models stand on a circle and step along it. A shot lands at once, with a hit chance that drops with distance.
 - **Plane** (`plane-*` rankings, engine in `packages/arcade/src/games/plane/`): a 20 by 20 square. Models step in 12 clock directions, walls and other models block them, and a shot flies 3 units per tick, so it can be dodged. One shot in flight per model. The state gives distances and clock directions, and warns about incoming shots.
@@ -150,9 +153,13 @@ Each field and clock has its own ranking (`arena-lockstep`, `plane-realtime`, ..
 
 Presets are named setups worth watching (or recording). Pick one in the setup, or open `#/arena/<id>`. They live in `packages/arcade/src/games/arena/presets.ts`, and together they cover both fields, both clocks and both policies (a test checks it). Models are not fully deterministic, so a preset repeats the setup and the seed, not always the match.
 
+The all-vs-all presets include every model option with configured credentials. Each match sends at most six decision calls at once.
+
 | Preset | Setup | Seen so far |
 | --- | --- | --- |
 | 🤠 `standoff` | Ring. Clef vs Jev, lockstep, top answers | Both stay put and never fire. Draw after 10 quiet turns. Jev's P(fire) sits near 50%, so in real-time it sometimes fires and wins. |
+| 🌍 `all-vs-all` | Ring. Every configured model option, lockstep, sampling | One player per option, including models served through different hosts. |
+| 🌐 `all-vs-all-plane` | Plane. Every configured model option, lockstep, sampling | The same full roster, with projectiles and movement on the plane. |
 | ⚡ `speed-duel` | Ring. Clef Flash vs Clef, real-time, sampling | Clef Flash answers in about 180 ms against 340 ms and acts about 1.8 times as often. |
 | 🔫 `trigger-happy` | Ring. GPT-6 Luna vs Clef vs Jev, real-time, top answers | Clef and Jev stay put all match. Luna fires from its first answer, but OpenAI's first answers are slow (up to 12 s), so Luna acts less often. |
 | 🛰️ `luna-hosts` | Ring. GPT-6 Luna via OpenAI, OpenRouter and AI Gateway, real-time, sampling | One match: OpenAI direct (230 ms) won, OpenRouter (300 ms) fell first. |

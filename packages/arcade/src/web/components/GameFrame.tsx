@@ -195,14 +195,14 @@ function PlayerBar({
         {/* Now playing: the models, and what the game is doing. */}
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex shrink-0 -space-x-2">
-            {players.map((p, i) => {
+            {players.slice(0, 6).map((p, i) => {
               // Like the arena's dots: the host's logo, so the same model on two hosts looks different.
               const { name, provider } = splitLabel(p.label);
               const brand = (provider && hostByName(provider)) || makerOf(name);
               return (
                 <span
                   key={`${p.label}-${i}`}
-                  className="flex size-8 items-center justify-center rounded-full bg-[#101216]"
+                  className={cn("size-8 items-center justify-center rounded-full bg-[#101216]", i < 2 ? "flex" : "hidden sm:flex")}
                   style={{ boxShadow: `0 0 0 2px ${p.color}, 0 0 10px ${p.color}66` }}
                   title={p.label}
                 >
@@ -210,6 +210,12 @@ function PlayerBar({
                 </span>
               );
             })}
+            {players.length > 2 && (
+              <span className={cn("size-8 items-center justify-center rounded-full border border-border bg-[#101216] font-mono text-xs text-muted-foreground", players.length > 6 ? "flex" : "flex sm:hidden")}>
+                <span className="sm:hidden">+{players.length - 2}</span>
+                {players.length > 6 && <span className="hidden sm:inline">+{players.length - 6}</span>}
+              </span>
+            )}
           </div>
           <div className="hidden min-w-0 sm:block">
             <div className="flex items-center gap-2 text-sm font-medium">

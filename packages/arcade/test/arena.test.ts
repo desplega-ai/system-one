@@ -218,16 +218,43 @@ describe("state for the model", () => {
   });
 });
 
-test("every preset uses registry models, 2 to 6 of them, and has a unique id", async () => {
-  const { presets } = await import("../src/games/arena/presets.ts");
+test("every preset uses registry models and has a unique id", async () => {
+  const { modelsForPreset, presets } = await import("../src/games/arena/presets.ts");
   const { registry } = await import("../src/server/models.ts");
   const keys = new Set(registry.map((e) => e.key));
   for (const p of presets) {
-    expect({ id: p.id, unknown: p.models.filter((m) => !keys.has(m)) }).toEqual({ id: p.id, unknown: [] });
-    expect(p.models.length).toBeGreaterThanOrEqual(2);
-    expect(p.models.length).toBeLessThanOrEqual(6);
+    const models = modelsForPreset(p, [...keys]);
+    expect({ id: p.id, unknown: models.filter((m) => !keys.has(m)) }).toEqual({ id: p.id, unknown: [] });
+    expect(models.length).toBeGreaterThanOrEqual(2);
   }
   expect(new Set(presets.map((p) => p.id)).size).toBe(presets.length);
+});
+
+test("all-model presets include each available option once and work on both fields", async () => {
+  const { modelsForPreset, presets } = await import("../src/games/arena/presets.ts");
+  const { registry } = await import("../src/server/models.ts");
+  const { fields } = await import("../src/games/arena/fields.ts");
+  const { agentColor } = await import("../src/web/ui/colors.ts");
+  const available = registry.map((entry) => entry.key);
+  const all = presets.filter((preset) => preset.models === "all");
+  expect(new Set(all.map((preset) => preset.field))).toEqual(new Set(["ring", "plane"]));
+  for (const preset of all) {
+    const models = modelsForPreset(preset, available);
+    expect(models).toEqual(available);
+    expect(modelsForPreset(preset, available.slice(2))).toEqual(available.slice(2));
+    const field = fields[preset.field];
+    const match = field.createMatch(models, { maxTicks: 1 });
+    expect(new Set(match.agents.map((agent) => agent.id)).size).toBe(available.length);
+    expect(new Set(match.agents.map((agent) => agentColor(agent.id))).size).toBe(available.length);
+    for (const agent of match.agents) {
+      const target = field.questions(match, agent).target;
+      expect(target?.type).toBe("choice");
+      if (target?.type === "choice") expect(Object.keys(target.options)).toHaveLength(available.length);
+    }
+    const final = field.playTick(match, {}, "sample", () => 0);
+    expect(field.isOver(final)).toBe(true);
+    expect(new Set(field.scores(final).map((row) => row.model)).size).toBe(available.length);
+  }
 });
 
 test("the presets mix every field, clock and policy", async () => {

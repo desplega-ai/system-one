@@ -1,6 +1,6 @@
 // Draws the plane: a square field, the agents with dashed trails of their last moves, and the projectiles
 // in flight. The page keeps a Shown value per match, so agents and projectiles glide between ticks.
-import { agentColors } from "../../web/ui/colors.ts";
+import { agentColor } from "../../web/ui/colors.ts";
 import { endReason, isOver, type Match, SIZE, standings, START_HP } from "./engine.ts";
 
 type Point = { x: number; y: number };
@@ -62,7 +62,7 @@ export function glide(shown: Shown, match: Match, now: number): Shown {
       dashes[agent.id] = { from: start, to: { x: agent.x, y: agent.y }, at: now };
       trails[agent.id] = [...(trail.length > 0 ? trail : [agent.from]), { x: agent.x, y: agent.y }].slice(-TRAIL);
       const back = Math.atan2(agent.from.y - agent.y, agent.from.x - agent.x);
-      sparks = [...sparks, ...burst(agent.from, back, 1.6, 12, 9, agentColors[agent.id]!, now)];
+      sparks = [...sparks, ...burst(agent.from, back, 1.6, 12, 9, agentColor(agent.id), now)];
     } else {
       dashes[agent.id] = old && old.to.x === agent.x && old.to.y === agent.y ? old : { from: { x: agent.x, y: agent.y }, to: { x: agent.x, y: agent.y }, at: 0 };
       trails[agent.id] = trail;
@@ -71,7 +71,7 @@ export function glide(shown: Shown, match: Match, now: number): Shown {
   const projectiles: Record<string, Point> = {};
   // A new projectile starts at its shooter and catches up with the real position.
   for (const p of match.projectiles) projectiles[p.id] = toward(shown.projectiles[p.id] ?? match.agents.find((a) => a.id === p.from), p, 0.35);
-  const fresh = newTick ? match.hits.map((h) => ({ x: h.x, y: h.y, color: agentColors[h.from]!, at: now })) : [];
+  const fresh = newTick ? match.hits.map((h) => ({ x: h.x, y: h.y, color: agentColor(h.from), at: now })) : [];
   for (const hit of fresh) sparks = [...sparks, ...burst(hit, 0, Math.PI * 2, 16, 9, hit.color, now), ...burst(hit, 0, Math.PI * 2, 6, 5, "#ffffff", now)];
   return { tick: match.tick, dashes, trails, projectiles, hits: [...shown.hits.filter((h) => now - h.at < HIT_MS), ...fresh], sparks };
 }
@@ -124,7 +124,7 @@ export function drawPlane(
   const posOf = (id: string, fallback: Point) => (shown.dashes[id] ? dashAt(shown.dashes[id], now) : fallback);
   for (const agent of match.agents) {
     const trail = [...(shown.trails[agent.id] ?? []).slice(0, -1), posOf(agent.id, agent)];
-    ctx.strokeStyle = agentColors[agent.id]!;
+    ctx.strokeStyle = agentColor(agent.id);
     for (let i = 1; i < trail.length; i++) {
       const a = px(trail[i - 1]!);
       const b = px(trail[i]!);
@@ -142,7 +142,7 @@ export function drawPlane(
   for (const p of match.projectiles) {
     const at = px(shown.projectiles[p.id] ?? p);
     const length = Math.hypot(p.dx, p.dy) || 1;
-    const color = agentColors[p.from]!;
+    const color = agentColor(p.from);
     ctx.strokeStyle = color;
     ctx.shadowColor = color;
     ctx.shadowBlur = 12;
@@ -168,7 +168,7 @@ export function drawPlane(
     const tail = px(dashAt(dash, now - DASH_MS * 0.45));
     const gradient = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
     gradient.addColorStop(0, "rgba(255,255,255,0)");
-    gradient.addColorStop(1, agentColors[agent.id]!);
+    gradient.addColorStop(1, agentColor(agent.id));
     ctx.globalAlpha = 1 - t;
     ctx.strokeStyle = gradient;
     ctx.lineCap = "round";
@@ -215,26 +215,35 @@ export function drawPlane(
   ctx.globalAlpha = 1;
 
   const radius = Math.max(11, Math.min(16, scale * 0.7));
+  const numbered = match.agents.length > 6;
   for (const agent of match.agents) {
     const { x, y } = px(posOf(agent.id, agent));
     const out = agent.hp <= 0;
-    const color = agentColors[agent.id]!;
+    const color = agentColor(agent.id);
     const logo = logos[agent.id];
-    const withLogo = logo?.complete && logo.naturalWidth > 0;
-    ctx.fillStyle = out ? "rgba(255,255,255,0.12)" : withLogo ? "#101216" : color;
+    const withLogo = !numbered && logo?.complete && logo.naturalWidth > 0;
+    ctx.fillStyle = out ? "rgba(255,255,255,0.12)" : withLogo || numbered ? "#101216" : color;
     ctx.shadowColor = color;
     ctx.shadowBlur = out ? 0 : 20;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    if (withLogo) {
+    if (withLogo || numbered) {
       ctx.strokeStyle = out ? "rgba(255,255,255,0.2)" : color;
       ctx.lineWidth = 2.5;
       ctx.stroke();
       ctx.globalAlpha = out ? 0.35 : 1;
-      const side = radius * 1.15;
-      ctx.drawImage(logo, x - side / 2, y - side / 2, side, side);
+      if (withLogo) {
+        const side = radius * 1.15;
+        ctx.drawImage(logo, x - side / 2, y - side / 2, side, side);
+      } else {
+        ctx.fillStyle = color;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "600 11px 'Geist Mono Variable', ui-monospace, monospace";
+        ctx.fillText((labels[agent.id] ?? agent.id).replace(/^#/, ""), x, y);
+      }
       ctx.globalAlpha = 1;
     }
     // Hit points as pips above the dot, the label under it.
@@ -244,12 +253,14 @@ export function drawPlane(
       ctx.arc(x + (i - (START_HP - 1) / 2) * 8, y - radius - 7, 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = out ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.9)";
-    ctx.font = "500 12px 'Geist Variable', system-ui, sans-serif";
-    const label = labels[agent.id] ?? agent.id;
-    ctx.fillText(out ? `${label} (out)` : label, x, Math.min(size - 8, y + radius + 12));
+    if (!numbered) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = out ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.9)";
+      ctx.font = "500 12px 'Geist Variable', system-ui, sans-serif";
+      const label = labels[agent.id] ?? agent.id;
+      ctx.fillText(out ? `${label} (out)` : label, x, Math.min(size - 8, y + radius + 12));
+    }
   }
 
   ctx.textAlign = "left";
@@ -269,7 +280,7 @@ export function drawPlane(
     ctx.beginPath();
     ctx.roundRect(size / 2 - width / 2, size / 2 - 22, width, 44, 12);
     ctx.fill();
-    ctx.fillStyle = draw ? "rgba(255,255,255,0.85)" : agentColors[top.id]!;
+    ctx.fillStyle = draw ? "rgba(255,255,255,0.85)" : agentColor(top.id);
     ctx.fillText(text, size / 2, size / 2 + 1);
   }
 }

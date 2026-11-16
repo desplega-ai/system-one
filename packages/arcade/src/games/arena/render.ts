@@ -1,6 +1,6 @@
 // Draws the arena on a canvas: the ring, the shots of the last ticks and the agents.
 // The page keeps a Shown value per match, so agents glide along the ring and shots fade.
-import { agentColors } from "../../web/ui/colors.ts";
+import { agentColor } from "../../web/ui/colors.ts";
 import { endReason, isOver, type Match, type Shot, START_HP, STEP_DEGREES, standings } from "./engine.ts";
 
 /** What the screen shows: angles that glide toward the real ones, and recent shots with the time they landed. */
@@ -52,6 +52,8 @@ export function drawArena(
 
   const center = size / 2;
   const radius = size * 0.33;
+  const numbered = match.agents.length > 6;
+  const markerRadius = Math.max(6, Math.min(16, (Math.PI * radius) / match.agents.length - 2));
   // Angle 0 is at the top. Clockwise adds degrees, as in the engine.
   const at = (angle: number, r = radius) => {
     const rad = ((angle - 90) * Math.PI) / 180;
@@ -83,8 +85,8 @@ export function drawArena(
     const from = at(angleOf(shot.from));
     const to = at(angleOf(shot.to));
     ctx.globalAlpha = fade;
-    ctx.strokeStyle = shot.hit ? agentColors[shot.from]! : "rgba(255,255,255,0.45)";
-    ctx.shadowColor = shot.hit ? agentColors[shot.from]! : "transparent";
+    ctx.strokeStyle = shot.hit ? agentColor(shot.from) : "rgba(255,255,255,0.45)";
+    ctx.shadowColor = shot.hit ? agentColor(shot.from) : "transparent";
     ctx.shadowBlur = shot.hit ? 16 : 0;
     ctx.lineWidth = shot.hit ? 3 : 1.5;
     ctx.setLineDash(shot.hit ? [] : [6, 6]);
@@ -101,7 +103,7 @@ export function drawArena(
     const angle = angleOf(agent.id);
     const { x, y } = at(angle);
     const out = agent.hp <= 0;
-    const color = agentColors[agent.id]!;
+    const color = agentColor(agent.id);
 
     // A hit target flashes: a white ring that grows and fades.
     const hit = shown.shots.find((s) => s.shot.hit && s.shot.to === agent.id && now - s.at < FLASH_MS);
@@ -118,25 +120,34 @@ export function drawArena(
 
     // The dot: the agent's color, or a dark disc with a colored ring around the maker's logo.
     const logo = logos[agent.id];
-    const withLogo = logo?.complete && logo.naturalWidth > 0;
-    ctx.fillStyle = out ? "rgba(255,255,255,0.12)" : withLogo ? "#101216" : color;
+    const withLogo = !numbered && logo?.complete && logo.naturalWidth > 0;
+    ctx.fillStyle = out ? "rgba(255,255,255,0.12)" : withLogo || numbered ? "#101216" : color;
     ctx.shadowColor = color;
-    ctx.shadowBlur = out ? 0 : 22;
+    ctx.shadowBlur = out ? 0 : markerRadius;
     ctx.beginPath();
-    ctx.arc(x, y, withLogo ? 16 : 14, 0, Math.PI * 2);
+    ctx.arc(x, y, withLogo || numbered ? markerRadius : markerRadius * 0.875, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    if (withLogo) {
+    if (withLogo || numbered) {
       ctx.strokeStyle = out ? "rgba(255,255,255,0.2)" : color;
       ctx.lineWidth = 2.5;
       ctx.stroke();
       ctx.globalAlpha = out ? 0.35 : 1;
-      ctx.drawImage(logo, x - 9, y - 9, 18, 18);
+      if (withLogo) {
+        const side = markerRadius * 1.125;
+        ctx.drawImage(logo, x - side / 2, y - side / 2, side, side);
+      } else {
+        ctx.fillStyle = color;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "600 11px 'Geist Mono Variable', ui-monospace, monospace";
+        ctx.fillText((labels[agent.id] ?? agent.id).replace(/^#/, ""), x, y);
+      }
       ctx.globalAlpha = 1;
     }
 
     // Hit points as a row of pips on the inner side of the dot, where only shots pass.
-    const inner = at(angle, radius - 28);
+    const inner = at(angle, radius - markerRadius - 12);
     for (let i = 0; i < START_HP; i++) {
       ctx.fillStyle = i < agent.hp ? color : "rgba(255,255,255,0.15)";
       ctx.beginPath();
@@ -144,13 +155,15 @@ export function drawArena(
       ctx.fill();
     }
 
-    // The label is centered over the dot in the top half, under it otherwise, so it stays inside the canvas.
-    const spot = { x, y: y < center - radius * 0.3 ? y - 30 : y + 31 };
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = out ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.9)";
-    ctx.font = "500 13px 'Geist Variable', system-ui, sans-serif";
-    ctx.fillText(out ? `${labels[agent.id] ?? agent.id} (out)` : (labels[agent.id] ?? agent.id), spot.x, spot.y);
+    if (!numbered) {
+      // Keep model names inside the canvas, above or below their dots.
+      const spot = { x, y: y < center - radius * 0.3 ? y - markerRadius - 14 : y + markerRadius + 15 };
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = out ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.9)";
+      ctx.font = "500 13px 'Geist Variable', system-ui, sans-serif";
+      ctx.fillText(out ? `${labels[agent.id] ?? agent.id} (out)` : (labels[agent.id] ?? agent.id), spot.x, spot.y);
+    }
   }
 
   ctx.textAlign = "center";
@@ -163,7 +176,7 @@ export function drawArena(
   if (isOver(match)) {
     const top = standings(match)[0]!;
     const draw = endReason(match) === "stalemate" || top.hp <= 0;
-    ctx.fillStyle = draw ? "rgba(255,255,255,0.85)" : agentColors[top.id]!;
+    ctx.fillStyle = draw ? "rgba(255,255,255,0.85)" : agentColor(top.id);
     ctx.shadowColor = ctx.fillStyle;
     ctx.shadowBlur = draw ? 0 : 18;
     ctx.font = "600 22px 'Geist Variable', system-ui, sans-serif";

@@ -11,6 +11,7 @@ export function ProbabilityBars({
   answer,
   color,
   limit,
+  optionLabel,
   minRows = 1,
 }: {
   title: string;
@@ -18,6 +19,7 @@ export function ProbabilityBars({
   answer: Answer | undefined;
   color?: string;
   limit?: number;
+  optionLabel?: (option: string) => string;
   /** Empty rows keep the height steady while the number of options changes. */
   minRows?: number;
 }) {
@@ -39,7 +41,7 @@ export function ProbabilityBars({
       ) : answer.type === "choice" ? (
         // With a limit, only the most likely options, most likely first.
         (limit ? Object.entries(answer.probabilities).sort(([, a], [, b]) => b - a).slice(0, limit) : Object.entries(answer.probabilities)).map(([option, p]) => (
-          <Bar key={option} label={option} p={p} best={option === answer.choice} color={color} />
+          <Bar key={option} label={optionLabel?.(option) ?? option} p={p} best={option === answer.choice} color={color} />
         ))
       ) : (
         answer.probabilities.map((p, i) => {

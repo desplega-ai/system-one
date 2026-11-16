@@ -63,7 +63,7 @@ describe("setup and geometry", () => {
     expect(match.agents.map((a) => a.id)).toEqual(["red", "blue", "green", "yellow"]);
     expect(createMatch(["a", "b", "c", "d", "e", "f"]).agents).toHaveLength(6);
     expect(() => createMatch(["solo"])).toThrow(RangeError);
-    expect(() => createMatch(Array(7).fill("m"))).toThrow(RangeError);
+    expect(createMatch(Array(26).fill("m")).agents).toHaveLength(26);
   });
 
   test("clock vectors have unit length and clockOf returns the nearest direction", () => {

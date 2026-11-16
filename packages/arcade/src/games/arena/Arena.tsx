@@ -12,7 +12,7 @@ import { useSquareSide } from "../../web/lib/hooks.ts";
 import { Board } from "../../web/ui/Board.tsx";
 import { FullscreenButton } from "../../web/ui/FullscreenButton.tsx";
 import { hostByKey, logoImage, makerOf } from "../../web/ui/brands.ts";
-import { agentColors } from "../../web/ui/colors.ts";
+import { agentColor, agentColors } from "../../web/ui/colors.ts";
 import { addCall, emptyStats, type RunStats, usd } from "../../web/ui/Hud.tsx";
 import { ModelName, splitLabel } from "../../web/ui/ModelName.tsx";
 import { ModelPicker } from "../../web/ui/ModelPicker.tsx";
@@ -23,12 +23,13 @@ import { FilterChips, useModelFilters } from "../../web/ui/RankingFilters.tsx";
 import { SetupRow } from "../../web/ui/SetupRow.tsx";
 import { Tip } from "../../web/ui/Tip.tsx";
 import { createRng, MAX_TICKS, type Policy, type Rng, START_HP, STALEMATE_TURNS } from "./engine.ts";
+import { limitDecisions } from "./decisions.ts";
 import { type Field, type FieldAgent, type FieldId, type FieldMatch, type FieldTurn, fields } from "./fields.ts";
-import { type Clock, type Preset, presets } from "./presets.ts";
+import { type Clock, modelsForPreset, type Preset, presets } from "./presets.ts";
 
 type Status = "setup" | "running" | "paused" | "over";
 /** One match. Stop or a new match aborts its open calls, and late answers are dropped. */
-type Run = { runId: string; field: Field; rng: Rng; policy: Policy; clock: Clock; abort: AbortController };
+type Run = { runId: string; field: Field; rng: Rng; policy: Policy; clock: Clock; abort: AbortController; decide: typeof api.decide };
 
 /** Lockstep waits this long between ticks, so people can follow the match. */
 const LOCKSTEP_PAUSE_MS = 400;
@@ -76,11 +77,12 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
   }, []);
 
   const label = (key: string) => models.find((m) => m.key === key)?.label ?? key;
+  const modelKeys = models.filter((m) => m.inputs.includes("text")).map((m) => m.key);
   const preset = presets.find((p) => p.id === arg);
-  const hasModels = (keys: string[]) => keys.every((key) => models.some((m) => m.key === key));
+  const hasModels = (p: Preset) => modelsForPreset(p, modelKeys).length >= 2 && modelsForPreset(p, modelKeys).every((key) => modelKeys.includes(key));
   useEffect(() => {
-    if (!preset || models.length === 0 || !hasModels(preset.models) || statusRef.current === "running") return;
-    setSlots(preset.models);
+    if (!preset || models.length === 0 || !hasModels(preset) || statusRef.current === "running") return;
+    setSlots(modelsForPreset(preset, modelKeys));
     setFieldId(preset.field);
     setClock(preset.clock);
     setPolicy(preset.policy);
@@ -90,7 +92,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
 
   /** Before a match, the field shows the players to be. */
   const previewMatch = () =>
-    slots.length >= 2 && slots.length <= 6 ? field.createMatch(slots, { stalemateTurns, maxTicks: clock === "realtime" ? realtimeMaxTicks(field) : MAX_TICKS }) : undefined;
+    slots.length >= 2 ? field.createMatch(slots, { stalemateTurns, maxTicks: clock === "realtime" ? realtimeMaxTicks(field) : MAX_TICKS }) : undefined;
   // Draw on every animation frame: agents glide, shots fade. The view belongs to the field that made it.
   const [arenaBox, arenaWidth] = useSquareSide<HTMLDivElement>();
   const arenaSize = useRef(0);
@@ -98,9 +100,8 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
   const labels = useRef<Record<string, string>>({});
   const logos = useRef<Record<string, HTMLImageElement | undefined>>({});
   const onRing = match?.agents ?? previewMatch()?.agents ?? [];
-  labels.current = Object.fromEntries(onRing.map((a) => [a.id, splitLabel(label(a.model)).name]));
-  // The dot shows where the model runs (the host), and the label under it names the model. So three Jevs on
-  // three hosts look different. The registry key starts with the host: "openrouter:jev-latest".
+  labels.current = Object.fromEntries(onRing.map((a, i) => [a.id, onRing.length > 6 ? `#${i + 1}` : splitLabel(label(a.model)).name]));
+  // Small rosters show host logos on the field. Large rosters use numbers that match the player cards.
   logos.current = Object.fromEntries(
     onRing.map((a) => {
       const brand = hostByKey(a.model.split(":")[0]!) ?? makerOf(splitLabel(label(a.model)).name);
@@ -159,7 +160,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
     const standing = f.alive(m);
     const settled = await Promise.allSettled(
       standing.map((agent) =>
-        api.decide(agent.model, current.runId, { state: f.state(m, agent), questions: f.questions(m, agent), signal: current.abort.signal }),
+        current.decide(agent.model, current.runId, { state: f.state(m, agent), questions: f.questions(m, agent), signal: current.abort.signal }),
       ),
     );
     // Stopped, or replaced by a new match, while the calls were open.
@@ -217,7 +218,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
           // Built at call time, so a slow model acts on an older state.
           return { state: f.state(m, me), questions: f.questions(m, me) };
         },
-        decide: (call, signal) => api.decide(agent.model, current.runId, { ...call, signal }),
+        decide: (call, signal) => current.decide(agent.model, current.runId, { ...call, signal }),
         onResult: (decision) => {
           // Two answers in one tick: act on the newest, but keep the cost and latency of both.
           const before = pending[agent.id];
@@ -262,7 +263,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
       const game = `${field.game}-${clock}`;
       const maxTicks = clock === "realtime" ? realtimeMaxTicks(field) : MAX_TICKS;
       const runId = await api.createRun(game, { models: slots, field: fieldId, seed, policy, clock, maxTicks, stalemateTurns, preset: preset?.id ?? null });
-      const current: Run = { runId, field, rng: createRng(seed), policy, clock, abort: new AbortController() };
+      const current: Run = { runId, field, rng: createRng(seed), policy, clock, abort: new AbortController(), decide: limitDecisions(api.decide) };
       run.current = current;
       statsRef.current = emptyStats;
       setStats(emptyStats);
@@ -332,7 +333,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
         onStep: playClock === "lockstep" ? step : undefined,
       }}
       stats={stats}
-      players={agents.map((agent) => ({ label: label(agent.model), color: agentColors[agent.id]! }))}
+      players={agents.map((agent) => ({ label: label(agent.model), color: agentColor(agent.id) }))}
       subtitle={subtitle}
       progress={match ? { value: match.tick / match.maxTicks, left: `tick ${match.tick}`, right: `${match.maxTicks}` } : undefined}
       board={
@@ -380,7 +381,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
               usable={models.filter((m) => m.inputs.includes("text"))}
               slots={slots}
               min={2}
-              max={6}
+              max={Math.max(2, modelKeys.length)}
               placeholder="Try: all Jevs on a plane, or Luna against two Clefs in real-time"
               choices={{
                 field: { question: "Which field?", options: { ring: "a ring: agents stand on a circle", plane: "a plane: a square field where shots fly" }, current: fieldId },
@@ -411,8 +412,8 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
               onValueChange={(id) => (window.location.hash = id ? `#/arena/${id}` : "#/arena")}
             >
               {presets.map((p) => (
-                <Tip key={p.id} text={models.length > 0 && !hasModels(p.models) ? "Needs a model without a key here" : presetSummary(p, label)}>
-                  <ToggleGroupItem value={p.id} className={onChip} disabled={models.length > 0 && !hasModels(p.models)}>
+                <Tip key={p.id} text={models.length > 0 && !hasModels(p) ? "Needs a model without a key here" : presetSummary(p, label, modelKeys)}>
+                  <ToggleGroupItem value={p.id} className={onChip} disabled={models.length > 0 && !hasModels(p)}>
                     <span aria-hidden="true">{p.emoji}</span> {p.name}
                   </ToggleGroupItem>
                 </Tip>
@@ -421,7 +422,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
             {preset && <p className="max-w-3xl text-sm text-muted-foreground">{preset.description}</p>}
           </SetupRow>
           <SetupRow label="Players">
-            <ModelPicker models={models} value={slots} onChange={setSlots} min={2} max={6} needs={["text"]} />
+            <ModelPicker models={models} value={slots} onChange={setSlots} min={2} max={Math.max(2, modelKeys.length)} needs={["text"]} />
           </SetupRow>
           <SetupRow label="Rules">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
@@ -501,7 +502,7 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
             <ol className="pointer-events-none absolute bottom-3 left-4 space-y-0.5 font-mono text-[11px]">
               {match.events.slice(0, 3).map((event, i) => (
                 <li key={`${match.tick}-${i}`} style={{ opacity: 1 - i * 0.3 }}>
-                  <EventText text={event} />
+                  <EventText text={event} labels={agents.length > 6 ? labels.current : undefined} />
                 </li>
               ))}
             </ol>
@@ -509,8 +510,8 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
         </div>
         <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-3">
           {status === "over" && match && <ArenaResult field={run.current?.field ?? field} match={match} label={label} />}
-          {agents.map((agent) => (
-            <PlayerCard key={agent.id} agent={agent} label={label(agent.model)} waiting={!match} />
+          {agents.map((agent, i) => (
+            <PlayerCard key={agent.id} agent={agent} label={label(agent.model)} waiting={!match} number={agents.length > 6 ? i + 1 : undefined} targetLabels={agents.length > 6 ? labels.current : undefined} />
           ))}
         </div>
       </div>
@@ -519,10 +520,10 @@ export function Arena({ arg, info }: { arg?: string; info: FrameInfo }) {
 }
 
 /** "Ring, real-time, top answer: Clef vs Jev", for the preset tooltips. */
-function presetSummary(preset: Preset, label: (key: string) => string): string {
+function presetSummary(preset: Preset, label: (key: string) => string, available: string[]): string {
   const clock = preset.clock === "realtime" ? "real-time" : "lockstep";
   const policy = preset.policy === "top" ? "top answer" : "sample";
-  return `${fields[preset.field].name}, ${clock}, ${policy}: ${preset.models.map((key) => splitLabel(label(key)).name).join(" vs ")}`;
+  return `${fields[preset.field].name}, ${clock}, ${policy}: ${modelsForPreset(preset, available).map((key) => splitLabel(label(key)).name).join(" vs ")}`;
 }
 
 /** How the match ended, and the final standings. */
@@ -545,11 +546,11 @@ function ArenaResult({ field, match, label }: { field: Field; match: FieldMatch;
     <ResultCard
       title={title}
       detail={detail}
-      color={draw ? undefined : agentColors[top.id]}
+      color={draw ? undefined : agentColor(top.id)}
       rows={ranked.map((agent, i) => ({
         key: agent.id,
         label: label(agent.model),
-        color: agentColors[agent.id]!,
+        color: agentColor(agent.id),
         place: i + 1,
         out: agent.hp <= 0,
         stats: [
@@ -564,13 +565,13 @@ function ArenaResult({ field, match, label }: { field: Field; match: FieldMatch;
 }
 
 /** An event line, with each agent name in its color. */
-function EventText({ text }: { text: string }) {
+function EventText({ text, labels }: { text: string; labels?: Record<string, string> }) {
   return (
     <>
       {text.split(" ").map((word, i) => (
-        <span key={i} style={agentColors[word] ? { color: agentColors[word], fontWeight: 600 } : { color: "rgba(255,255,255,0.75)" }}>
+        <span key={i} style={(agentColors[word] || /^player\d+$/.test(word)) ? { color: agentColor(word), fontWeight: 600 } : { color: "rgba(255,255,255,0.75)" }}>
           {i > 0 && " "}
-          {word}
+          {labels?.[word] ?? word}
         </span>
       ))}
     </>
@@ -578,13 +579,14 @@ function EventText({ text }: { text: string }) {
 }
 
 /** One player: its color, its hit points, and what it wants to do. */
-function PlayerCard({ agent, label, waiting }: { agent: FieldAgent; label: string; waiting: boolean }) {
-  const color = agentColors[agent.id]!;
+function PlayerCard({ agent, label, waiting, number, targetLabels }: { agent: FieldAgent; label: string; waiting: boolean; number?: number; targetLabels?: Record<string, string> }) {
+  const color = agentColor(agent.id);
   const out = agent.hp <= 0;
   return (
     <Card className={cn("relative gap-3 overflow-hidden py-3 pr-4 pl-5 transition-opacity", out && "opacity-45")}>
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: color, boxShadow: `0 0 12px ${color}` }} />
       <div className="flex items-center gap-3">
+        {number && <span className="font-mono text-xs text-muted-foreground">#{number}</span>}
         <ModelName label={label} />
         <span className="ml-auto flex items-center gap-1">
           {out ? (
@@ -600,7 +602,7 @@ function PlayerCard({ agent, label, waiting }: { agent: FieldAgent; label: strin
         <>
           <div className="grid gap-3 sm:grid-cols-3 sm:gap-5">
             <ProbabilityBars title="move" answer={agent.lastAnswers?.move} color={color} limit={3} minRows={3} />
-            <ProbabilityBars title="aim at" answer={agent.lastAnswers?.target} color={color} limit={3} minRows={3} />
+            <ProbabilityBars title="aim at" answer={agent.lastAnswers?.target} color={color} limit={3} minRows={3} optionLabel={(id) => targetLabels?.[id] ?? id} />
             <ProbabilityBars title="fire" answer={agent.lastAnswers?.fire} color={color} minRows={3} />
           </div>
           <div className="truncate font-mono text-[10px] text-muted-foreground tabular-nums">
